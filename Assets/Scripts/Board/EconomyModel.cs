@@ -106,10 +106,12 @@ namespace BackpackDefense
         private int _gold;
         private int _level;
         private bool _isLocked;
+        private bool _isPreparing = true;
 
         public int Gold => _gold;
         public int Level => _level;
         public bool IsLocked => _isLocked;
+        public bool IsPreparing => _isPreparing;
         public IReadOnlyList<int> Offers => _offers;
         public IReadOnlyList<TowerUnit> Units => _units;
         public int LevelCost => _settings.CostForLevel(_level);
@@ -163,7 +165,7 @@ namespace BackpackDefense
         /// </summary>
         public bool Buy(int slot)
         {
-            if (slot < 0 || slot >= SHOP_SIZE || _offers[slot] < 0 || BenchCount() >= BENCH_SIZE) return false;
+            if (!_isPreparing || slot < 0 || slot >= SHOP_SIZE || _offers[slot] < 0 || BenchCount() >= BENCH_SIZE) return false;
             int type = _offers[slot];
             int price = _shapes[type].Cost;
             if (_gold < price) return false;
@@ -178,7 +180,7 @@ namespace BackpackDefense
         /// </summary>
         public bool Reroll()
         {
-            if (_isLocked || _gold < _settings.RerollCost) return false;
+            if (!_isPreparing || _isLocked || _gold < _settings.RerollCost) return false;
             _gold -= _settings.RerollCost;
             RollOffers();
             return true;
@@ -187,14 +189,35 @@ namespace BackpackDefense
         /// <summary>
         /// Changes whether the whole shop is locked between waves.
         /// </summary>
-        public void ToggleLock() => _isLocked = !_isLocked;
+        public void ToggleLock()
+        {
+            if (_isPreparing) _isLocked = !_isLocked;
+        }
 
         /// <summary>
         /// Refreshes an unlocked shop at the next preparation phase.
         /// </summary>
         public void RefreshForNextWave()
         {
+            if (_isPreparing && !_isLocked) RollOffers();
+        }
+
+        /// <summary>
+        /// Locks all economy and placement actions while a wave is in progress or awaiting results.
+        /// </summary>
+        public void BeginCombat()
+        {
+            _isPreparing = false;
+        }
+
+        /// <summary>
+        /// Pays clear income, refreshes an unlocked shop, and restores preparation actions.
+        /// </summary>
+        public void EnterPreparation(int goldReward)
+        {
+            _gold += Mathf.Max(0, goldReward);
             if (!_isLocked) RollOffers();
+            _isPreparing = true;
         }
 
         /// <summary>
@@ -202,7 +225,7 @@ namespace BackpackDefense
         /// </summary>
         public bool LevelUp()
         {
-            if (_level >= _settings.MaxLevel || _gold < LevelCost) return false;
+            if (!_isPreparing || _level >= _settings.MaxLevel || _gold < LevelCost) return false;
             _gold -= LevelCost;
             _level++;
             return true;
@@ -213,7 +236,7 @@ namespace BackpackDefense
         /// </summary>
         public bool Place(TowerUnit unit, Vector2Int anchor, int rotation)
         {
-            if (!_units.Contains(unit) || (unit.Placement == null && _board.Towers.Count >= _level)) return false;
+            if (!_isPreparing || !_units.Contains(unit) || (unit.Placement == null && _board.Towers.Count >= _level)) return false;
             if (!_board.TryPlace(_shapes[unit.TypeIndex], anchor, rotation, unit.Placement, out PlacedTower placement)) return false;
             unit.SetPlacement(placement);
             return true;
@@ -224,7 +247,7 @@ namespace BackpackDefense
         /// </summary>
         public bool ReturnToBench(TowerUnit unit)
         {
-            if (!_units.Contains(unit) || unit.Placement == null || BenchCount() >= BENCH_SIZE) return false;
+            if (!_isPreparing || !_units.Contains(unit) || unit.Placement == null || BenchCount() >= BENCH_SIZE) return false;
             _board.Remove(unit.Placement);
             unit.SetPlacement(null);
             return true;
@@ -235,7 +258,7 @@ namespace BackpackDefense
         /// </summary>
         public bool Sell(TowerUnit unit)
         {
-            if (!_units.Contains(unit)) return false;
+            if (!_isPreparing || !_units.Contains(unit)) return false;
             if (unit.Placement != null) _board.Remove(unit.Placement);
             _gold += unit.InvestedGold;
             _units.Remove(unit);
@@ -247,7 +270,7 @@ namespace BackpackDefense
         /// </summary>
         public bool Feed(TowerUnit target, TowerUnit material)
         {
-            if (!CanFeed(target, material)) return false;
+            if (!_isPreparing || !CanFeed(target, material)) return false;
             if (material.Placement != null) _board.Remove(material.Placement);
             target.AddMaterial(material);
             _units.Remove(material);
@@ -259,7 +282,7 @@ namespace BackpackDefense
         /// </summary>
         public bool CanFeed(TowerUnit target, TowerUnit material)
         {
-            return target != null && material != null && target != material && _units.Contains(target)
+            return _isPreparing && target != null && material != null && target != material && _units.Contains(target)
                 && _units.Contains(material) && target.TypeIndex == material.TypeIndex
                 && target.FeedCount < 5 && material.FeedCount == 0;
         }

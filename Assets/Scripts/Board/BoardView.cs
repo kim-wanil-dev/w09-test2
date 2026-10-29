@@ -24,17 +24,24 @@ namespace BackpackDefense
         [Header("Synergy")]
         [SerializeField] private SynergySettings _synergySettings = new SynergySettings();
 
+        [Header("Combat")]
+        [SerializeField] private CombatSettings _combatSettings = new CombatSettings();
+
         [Header("Towers")]
         [SerializeField] private List<TowerShape> _towerDefinitions = new List<TowerShape>(TowerCatalog.CreateShapes());
 
-        private readonly BoardModel _board = new BoardModel();
+        private BoardModel _board;
         private readonly UnityEngine.UI.Image[,] _cells = new UnityEngine.UI.Image[BoardModel.WIDTH, BoardModel.HEIGHT];
         private readonly TextMeshProUGUI[,] _anchorLabels = new TextMeshProUGUI[BoardModel.WIDTH, BoardModel.HEIGHT];
         private readonly TextMeshProUGUI[] _shopLabels = new TextMeshProUGUI[4];
         private readonly TextMeshProUGUI[] _benchLabels = new TextMeshProUGUI[6];
         private readonly int[] _shopRotations = new int[4];
+        private readonly List<UnityEngine.UI.Button> _economyButtons = new List<UnityEngine.UI.Button>();
+        private readonly Dictionary<int, EnemyMarker> _enemyMarkers = new Dictionary<int, EnemyMarker>();
+        private readonly Dictionary<int, RectTransform> _impactMarkers = new Dictionary<int, RectTransform>();
         private IReadOnlyList<TowerShape> _shapes;
         private EconomyModel _economy;
+        private CombatModel _combat;
         private RectTransform _boardRect;
         private TextMeshProUGUI _status;
         private TextMeshProUGUI _economyStatus;
@@ -49,19 +56,62 @@ namespace BackpackDefense
         private bool _isSaleArmed;
         private PlacedTower _moving;
         private Vector2Int _grabOffset;
+        private int _activeSeed;
+        private CombatPhase _displayedPhase;
+        private bool _hasDisplayedPhase;
+        private UnityEngine.UI.Button _advanceButton;
+        private UnityEngine.UI.Button _pauseButton;
+        private UnityEngine.UI.Button _speedButton;
+        private UnityEngine.UI.Button _retryButton;
+        private UnityEngine.UI.Button _newRunButton;
+        private TextMeshProUGUI _advanceLabel;
+        private TextMeshProUGUI _pauseLabel;
+        private TextMeshProUGUI _speedLabel;
+
+        private sealed class EnemyMarker
+        {
+            public RectTransform Rect;
+            public UnityEngine.UI.Image Image;
+            public TextMeshProUGUI Label;
+            public RectTransform HealthFill;
+        }
 
         void Start()
         {
             _shapes = _towerDefinitions;
-            _economy = new EconomyModel(_board, _shapes, _shopSeed, _economySettings);
-            _font = TMP_Settings.defaultFontAsset;
+            _activeSeed = _shopSeed;
+            _board = new BoardModel();
+            _economy = new EconomyModel(_board, _shapes, _activeSeed, _economySettings);
+            _combat = new CombatModel(_activeSeed, _combatSettings);
+            _font = Resources.Load<TMP_FontAsset>("Fonts & Materials/LiberationSans SDF");
+            if (_font == null) _font = TMP_Settings.defaultFontAsset;
             CreateInterface();
-            Refresh(null, false, null);
+            HandlePhaseChange();
         }
 
         void Update()
         {
+            if (_combat == null) return;
+            bool advanced = _combat.Advance(Time.unscaledDeltaTime);
+            if (advanced) RenderCombatEntities();
+            if (!_hasDisplayedPhase || _displayedPhase != _combat.Phase) HandlePhaseChange();
+            UpdateCombatHud();
             if (Mouse.current == null || Keyboard.current == null) return;
+            if (_combat.Phase == CombatPhase.Combat && Keyboard.current.spaceKey.wasPressedThisFrame)
+                ToggleCombatPause();
+            if (_combat.Phase == CombatPhase.Preparation && Keyboard.current.enterKey.wasPressedThisFrame)
+                AdvancePhase();
+            if (_combat.Phase != CombatPhase.Preparation)
+            {
+                Vector2 combatPointer = Mouse.current.position.ReadValue();
+                if (Mouse.current.rightButton.wasPressedThisFrame && TryGetCell(combatPointer, out Vector2Int inspectCell))
+                {
+                    PlacedTower inspectTower = _board.FindTower(inspectCell);
+                    SelectUnit(inspectTower == null ? null : _economy.FindUnit(inspectTower));
+                    Refresh(null, false, null);
+                }
+                return;
+            }
             if (!_isDragging && _isFeeding && Keyboard.current.escapeKey.wasPressedThisFrame)
             {
                 CancelFeed();
@@ -193,6 +243,18 @@ namespace BackpackDefense
             CreateButton(canvas.transform, new Vector2(650, 70), new Vector2(260, 48),
                 () => { _isFeeding = _selectedUnit != null && _selectedUnit.FeedCount < 5; _material = null; Refresh(null, false, null); if (!_isFeeding) _status.text = "Select a tower below 3 stars first"; }).text = "SELECT MATERIAL";
             CreateButton(canvas.transform, new Vector2(650, 10), new Vector2(260, 48), ConfirmFeed).text = "CONFIRM FEED";
+            _advanceLabel = CreateButton(canvas.transform, new Vector2(650, 420), new Vector2(260, 48), AdvancePhase, false);
+            _advanceButton = _advanceLabel.GetComponentInParent<UnityEngine.UI.Button>();
+            _pauseLabel = CreateButton(canvas.transform, new Vector2(650, 360), new Vector2(125, 48), ToggleCombatPause, false);
+            _pauseButton = _pauseLabel.GetComponentInParent<UnityEngine.UI.Button>();
+            _speedLabel = CreateButton(canvas.transform, new Vector2(785, 360), new Vector2(125, 48), ToggleCombatSpeed, false);
+            _speedButton = _speedLabel.GetComponentInParent<UnityEngine.UI.Button>();
+            TextMeshProUGUI retryLabel = CreateButton(canvas.transform, new Vector2(650, 420), new Vector2(260, 48), RetrySameSeed, false);
+            _retryButton = retryLabel.GetComponentInParent<UnityEngine.UI.Button>();
+            TextMeshProUGUI newRunLabel = CreateButton(canvas.transform, new Vector2(650, 360), new Vector2(260, 48), StartNewSeed, false);
+            _newRunButton = newRunLabel.GetComponentInParent<UnityEngine.UI.Button>();
+            retryLabel.text = "RETRY SAME SEED";
+            newRunLabel.text = "NEW RUN / SEED";
             _economyStatus = CreateText(CreateRect(canvas.transform, "Economy Status", new Vector2(1000, 50), new Vector2(0, 410)), "", 24);
             RectTransform synergyRect = CreateRect(canvas.transform, "Synergy Status", new Vector2(500, 280), new Vector2(-650, -275));
             UnityEngine.UI.Image synergyBackground = synergyRect.gameObject.AddComponent<UnityEngine.UI.Image>();
@@ -215,7 +277,8 @@ namespace BackpackDefense
         /// <summary>
         /// Creates an interactive button with a text label at the requested position.
         /// </summary>
-        private TextMeshProUGUI CreateButton(Transform parent, Vector2 position, Vector2 size, UnityEngine.Events.UnityAction action)
+        private TextMeshProUGUI CreateButton(Transform parent, Vector2 position, Vector2 size,
+            UnityEngine.Events.UnityAction action, bool isEconomyAction = true)
         {
             RectTransform rect = CreateRect(parent, "Button", size, position);
             var image = rect.gameObject.AddComponent<UnityEngine.UI.Image>();
@@ -223,7 +286,300 @@ namespace BackpackDefense
             var button = rect.gameObject.AddComponent<UnityEngine.UI.Button>();
             button.targetGraphic = image;
             button.onClick.AddListener(action);
+            if (isEconomyAction) _economyButtons.Add(button);
             return CreateText(rect, "", 20);
+        }
+
+        /// <summary>
+        /// Recreates board, economy, and combat state for a deterministic run seed.
+        /// </summary>
+        private void InitializeRun(int seed)
+        {
+            _activeSeed = seed;
+            _board = new BoardModel();
+            _economy = new EconomyModel(_board, _shapes, seed, _economySettings);
+            _combat = new CombatModel(seed, _combatSettings);
+            _selectedUnit = null;
+            _material = null;
+            _moving = null;
+            _rotation = 0;
+            _isDragging = false;
+            _isFeeding = false;
+            _isSaleArmed = false;
+            System.Array.Clear(_shopRotations, 0, _shopRotations.Length);
+            _hasDisplayedPhase = false;
+            HandlePhaseChange();
+        }
+
+        /// <summary>
+        /// Starts a frozen-stat wave or advances a survived result into the next preparation phase.
+        /// </summary>
+        private void AdvancePhase()
+        {
+            if (_combat.Phase == CombatPhase.Preparation)
+            {
+                BoardSynergyEvaluation evaluation = SynergyEvaluator.Evaluate(
+                    _economy.Units, _shapes, _board.GetPath(), _synergySettings);
+                if (!_combat.StartWave(evaluation, _board.GetPath()))
+                {
+                    _status.text = "Wave could not start: check the board path and combat schedule";
+                    return;
+                }
+                _isDragging = false;
+                _moving = null;
+                CancelFeed();
+                _economy.BeginCombat();
+            }
+            else if (_combat.Phase == CombatPhase.WaveResult)
+            {
+                int reward = _combat.ContinueAfterWave();
+                _economy.EnterPreparation(reward);
+            }
+            HandlePhaseChange();
+        }
+
+        /// <summary>
+        /// Toggles the fixed-step combat clock and refreshes its visible state.
+        /// </summary>
+        private void ToggleCombatPause()
+        {
+            _combat.TogglePause();
+            UpdateControls();
+            UpdateCombatHud();
+        }
+
+        /// <summary>
+        /// Toggles the combat clock between one-times and two-times speed.
+        /// </summary>
+        private void ToggleCombatSpeed()
+        {
+            _combat.ToggleSpeed();
+            UpdateControls();
+            UpdateCombatHud();
+        }
+
+        /// <summary>
+        /// Starts a fresh run with the same shop seed and reset board, economy, and base health.
+        /// </summary>
+        private void RetrySameSeed()
+        {
+            InitializeRun(_activeSeed);
+        }
+
+        /// <summary>
+        /// Starts a fresh run with a newly generated shop seed.
+        /// </summary>
+        private void StartNewSeed()
+        {
+            int seed = UnityEngine.Random.Range(1, int.MaxValue);
+            if (seed == _activeSeed) seed = seed == int.MaxValue - 1 ? 1 : seed + 1;
+            InitializeRun(seed);
+        }
+
+        /// <summary>
+        /// Updates button availability and labels for the current run phase.
+        /// </summary>
+        private void UpdateControls()
+        {
+            if (_combat == null || _advanceButton == null) return;
+            bool preparing = _combat.Phase == CombatPhase.Preparation;
+            bool showingResult = _combat.Phase == CombatPhase.WaveResult;
+            bool inCombat = _combat.Phase == CombatPhase.Combat;
+            bool ended = _combat.Phase == CombatPhase.Victory || _combat.Phase == CombatPhase.Defeat;
+            foreach (UnityEngine.UI.Button button in _economyButtons)
+                button.interactable = preparing;
+            _advanceButton.gameObject.SetActive(preparing || showingResult);
+            _advanceButton.interactable = preparing || showingResult;
+            _advanceLabel.text = preparing ? "START WAVE" : "NEXT WAVE";
+            _pauseButton.gameObject.SetActive(inCombat);
+            _speedButton.gameObject.SetActive(inCombat);
+            _retryButton.gameObject.SetActive(ended);
+            _newRunButton.gameObject.SetActive(ended);
+            _pauseButton.interactable = inCombat;
+            _speedButton.interactable = inCombat;
+            _pauseLabel.text = _combat.IsPaused ? "RESUME" : "PAUSE";
+            _speedLabel.text = _combat.SimulationSpeed > 1.5f ? "2X" : "1X";
+        }
+
+        /// <summary>
+        /// Refreshes visible state after the combat phase changes.
+        /// </summary>
+        private void HandlePhaseChange()
+        {
+            _displayedPhase = _combat.Phase;
+            _hasDisplayedPhase = true;
+            UpdateControls();
+            Refresh(null, false, null);
+            RenderCombatEntities();
+            SetPhaseStatus();
+        }
+
+        /// <summary>
+        /// Displays a concise instruction or completed-wave report for the current phase.
+        /// </summary>
+        private void SetPhaseStatus()
+        {
+            switch (_combat.Phase)
+            {
+                case CombatPhase.Preparation:
+                    _status.text = "Preparation | Arrange towers, then START WAVE. Enter also starts the wave.";
+                    break;
+                case CombatPhase.Combat:
+                    _status.text = "Wave " + _combat.CurrentWave + " in progress | Space toggles pause. Board and economy are locked.";
+                    break;
+                case CombatPhase.WaveResult:
+                    WaveReport report = _combat.LastReport;
+                    _status.text = "Wave " + report.WaveNumber + " clear | Path " + report.PathLength + " | Kills " + report.Kills + " | Leaks " +
+                        report.Leaks + " | Base -" + report.BaseDamage + " (" + report.RemainingBaseHealth + " HP) | +" +
+                        report.GoldReward + " gold after NEXT WAVE.";
+                    break;
+                case CombatPhase.Victory:
+                    _status.text = "VICTORY | All " + _combat.WaveCount + " waves cleared with " +
+                        _combat.BaseHealth + " base HP. Retry this seed or start a new run.";
+                    break;
+                case CombatPhase.Defeat:
+                    string cause = _combat.DefeatCause == DefeatReason.BossReachedGoal
+                        ? "The boss reached the goal." : "Base health reached zero.";
+                    _status.text = "DEFEAT | " + cause + " Retry this seed or start a new run.";
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Displays current wave, base health, economy, seed, time, and combat speed.
+        /// </summary>
+        private void UpdateCombatHud()
+        {
+            if (_combat == null || _economyStatus == null) return;
+            int minutes = Mathf.FloorToInt(_combat.SimulationTime / 60f);
+            int seconds = Mathf.FloorToInt(_combat.SimulationTime % 60f);
+            string time = minutes.ToString("00") + ":" + seconds.ToString("00");
+            string phase = _combat.Phase == CombatPhase.Combat ? " | " + time + " | " +
+                (_combat.IsPaused ? "PAUSED" : (_combat.SimulationSpeed > 1.5f ? "2X" : "1X")) : "";
+            _economyStatus.text = "Wave " + _combat.CurrentWave + "/" + _combat.WaveCount + "   Base " +
+                _combat.BaseHealth + "/" + _combat.StartingBaseHealth + "   Gold " + _economy.Gold +
+                "   Level " + _economy.Level + "   Towers " + _board.Towers.Count + "/" + _economy.Level +
+                "   Seed " + _activeSeed + phase;
+        }
+
+        /// <summary>
+        /// Creates or updates enemy and mortar-landing tokens on the two-dimensional board.
+        /// </summary>
+        private void RenderCombatEntities()
+        {
+            if (_combat == null) return;
+            var activeEnemies = new HashSet<int>();
+            foreach (EnemyInstance enemy in _combat.Enemies)
+            {
+                activeEnemies.Add(enemy.Sequence);
+                if (!_enemyMarkers.TryGetValue(enemy.Sequence, out EnemyMarker marker))
+                {
+                    marker = CreateEnemyMarker();
+                    _enemyMarkers.Add(enemy.Sequence, marker);
+                }
+                marker.Rect.anchoredPosition = CellToBoardPosition(enemy.Position);
+                marker.Image.color = GetEnemyColor(enemy.Kind);
+                marker.Label.text = GetEnemyLabel(enemy.Kind);
+                marker.HealthFill.sizeDelta = new Vector2(30f * Mathf.Clamp01(enemy.Health / enemy.MaxHealth), 4f);
+            }
+            var removedEnemies = new List<int>();
+            foreach (KeyValuePair<int, EnemyMarker> item in _enemyMarkers)
+                if (!activeEnemies.Contains(item.Key)) removedEnemies.Add(item.Key);
+            foreach (int id in removedEnemies)
+            {
+                Destroy(_enemyMarkers[id].Rect.gameObject);
+                _enemyMarkers.Remove(id);
+            }
+
+            var activeImpacts = new HashSet<int>();
+            foreach (PendingAttack impact in _combat.PendingAttacks)
+            {
+                activeImpacts.Add(impact.Sequence);
+                if (!_impactMarkers.TryGetValue(impact.Sequence, out RectTransform marker))
+                    _impactMarkers.Add(impact.Sequence, marker = CreateImpactMarker());
+                marker.anchoredPosition = CellToBoardPosition(impact.ImpactPoint);
+            }
+            var removedImpacts = new List<int>();
+            foreach (KeyValuePair<int, RectTransform> item in _impactMarkers)
+                if (!activeImpacts.Contains(item.Key)) removedImpacts.Add(item.Key);
+            foreach (int id in removedImpacts)
+            {
+                Destroy(_impactMarkers[id].gameObject);
+                _impactMarkers.Remove(id);
+            }
+        }
+
+        /// <summary>
+        /// Creates a colored enemy token with a compact health bar.
+        /// </summary>
+        private EnemyMarker CreateEnemyMarker()
+        {
+            RectTransform rect = CreateRect(_boardRect, "Enemy", new Vector2(34f, 34f), Vector2.zero);
+            var image = rect.gameObject.AddComponent<UnityEngine.UI.Image>();
+            image.raycastTarget = false;
+            TextMeshProUGUI label = CreateText(rect, "", 13);
+            RectTransform healthBackground = CreateRect(rect, "Health Bar", new Vector2(30f, 4f), new Vector2(0f, -20f));
+            var backgroundImage = healthBackground.gameObject.AddComponent<UnityEngine.UI.Image>();
+            backgroundImage.color = new Color(0.08f, 0.08f, 0.08f, 0.95f);
+            backgroundImage.raycastTarget = false;
+            RectTransform healthFill = CreateRect(healthBackground, "Health", new Vector2(30f, 4f), Vector2.zero);
+            healthFill.anchorMin = new Vector2(0f, 0.5f);
+            healthFill.anchorMax = new Vector2(0f, 0.5f);
+            healthFill.pivot = new Vector2(0f, 0.5f);
+            healthFill.anchoredPosition = new Vector2(-15f, 0f);
+            var healthImage = healthFill.gameObject.AddComponent<UnityEngine.UI.Image>();
+            healthImage.color = new Color(0.28f, 0.92f, 0.38f);
+            healthImage.raycastTarget = false;
+            return new EnemyMarker { Rect = rect, Image = image, Label = label, HealthFill = healthFill };
+        }
+
+        /// <summary>
+        /// Creates a mortar marker at the fixed impact point while its attack is in flight.
+        /// </summary>
+        private RectTransform CreateImpactMarker()
+        {
+            RectTransform rect = CreateRect(_boardRect, "Mortar Impact", new Vector2(24f, 24f), Vector2.zero);
+            var image = rect.gameObject.AddComponent<UnityEngine.UI.Image>();
+            image.color = new Color(1f, 0.48f, 0.1f, 0.75f);
+            image.raycastTarget = false;
+            CreateText(rect, "M", 14);
+            return rect;
+        }
+
+        /// <summary>
+        /// Converts a grid-space enemy position to the board's centered canvas coordinates.
+        /// </summary>
+        private static Vector2 CellToBoardPosition(Vector2 position)
+        {
+            return new Vector2((position.x - 4.5f) * CELL_SIZE, (position.y - 3.5f) * CELL_SIZE);
+        }
+
+        /// <summary>
+        /// Returns the display color for one enemy movement profile.
+        /// </summary>
+        private static Color GetEnemyColor(EnemyKind kind)
+        {
+            switch (kind)
+            {
+                case EnemyKind.Fast: return new Color(0.96f, 0.78f, 0.18f);
+                case EnemyKind.Tank: return new Color(0.68f, 0.48f, 0.30f);
+                case EnemyKind.Boss: return new Color(0.83f, 0.18f, 0.23f);
+                default: return new Color(0.82f, 0.85f, 0.9f);
+            }
+        }
+
+        /// <summary>
+        /// Returns the compact board label for one enemy movement profile.
+        /// </summary>
+        private static string GetEnemyLabel(EnemyKind kind)
+        {
+            switch (kind)
+            {
+                case EnemyKind.Fast: return "F";
+                case EnemyKind.Tank: return "T";
+                case EnemyKind.Boss: return "B";
+                default: return "N";
+            }
         }
 
         /// <summary>
@@ -245,7 +601,7 @@ namespace BackpackDefense
         /// </summary>
         internal void BeginBenchDrag(int index)
         {
-            if (_isFeeding) return;
+            if (_isFeeding || _combat == null || _combat.Phase != CombatPhase.Preparation) return;
             TowerUnit unit = GetBenchUnit(index);
             if (unit == null) return;
             SelectUnit(unit);
@@ -497,7 +853,35 @@ namespace BackpackDefense
             }
 
             _synergyStatus.text = BuildSynergySummary(committedEvaluation, shownEvaluation, isSynergyPreview);
-            _selectedStatus.text = BuildSelectedStatus(committedEvaluation, shownEvaluation, isSynergyPreview);
+            bool showReport = _combat != null && _combat.LastReport != null &&
+                (_combat.Phase == CombatPhase.WaveResult || _combat.Phase == CombatPhase.Victory ||
+                 _combat.Phase == CombatPhase.Defeat);
+            _selectedStatus.text = showReport
+                ? BuildWaveReportStatus(_combat.LastReport)
+                : BuildSelectedStatus(committedEvaluation, shownEvaluation, isSynergyPreview);
+            UpdateControls();
+            UpdateCombatHud();
+            if (_combat != null && _combat.Phase != CombatPhase.Preparation) SetPhaseStatus();
+        }
+
+        /// <summary>
+        /// Formats wave outcome, captured synergy, and per-tower attack and damage totals.
+        /// </summary>
+        private static string BuildWaveReportStatus(WaveReport report)
+        {
+            var text = new StringBuilder();
+            text.Append("WAVE ").Append(report.WaveNumber).Append(" REPORT").AppendLine();
+            text.Append("Path ").Append(report.PathLength).Append(" | Kills ").Append(report.Kills)
+                .Append(" | Leaks ").Append(report.Leaks).AppendLine();
+            text.Append("Base damage ").Append(report.BaseDamage).Append(" | HP ")
+                .Append(report.RemainingBaseHealth).Append(" | Income ").Append(report.GoldReward).AppendLine();
+            text.Append("Synergy: ").Append(report.SynergySummary).AppendLine();
+            text.AppendLine("Tower | Attacks | Damage");
+            foreach (TowerDamageReport tower in report.Towers)
+                text.Append(tower.TowerName).Append(" | ").Append(tower.AttackCount).Append(" | ")
+                    .AppendLine(tower.DamageDealt.ToString("0.0"));
+            if (report.Towers.Count == 0) text.Append("No towers deployed");
+            return text.ToString();
         }
 
         /// <summary>
