@@ -6,28 +6,68 @@ using UnityEngine;
 namespace BackpackDefense
 {
     /// <summary>
+    /// Identifies a tower's race for global and adjacency synergies.
+    /// </summary>
+    public enum TowerRace
+    {
+        Stone,
+        Fungal,
+        Resonant
+    }
+
+    /// <summary>
+    /// Identifies a tower's combat role for global, path, and aura effects.
+    /// </summary>
+    public enum TowerRole
+    {
+        Mortar,
+        Sniper,
+        Tuner
+    }
+
+    /// <summary>
     /// Stores tower geometry and its attack anchor in local grid coordinates.
     /// </summary>
     [Serializable]
     public sealed class TowerShape
     {
+        [SerializeField] private string _definitionId;
         [SerializeField] private string _name;
         [SerializeField] private Vector2Int[] _cells;
         [SerializeField] private Vector2Int _anchor;
         [SerializeField, Range(1, 3)] private int _cost;
+        [SerializeField] private TowerRace _race;
+        [SerializeField] private TowerRole _role;
+        [SerializeField, Min(0f)] private float _baseAttack;
+        [SerializeField, Min(0.01f)] private float _baseAttackInterval = 1f;
+        [SerializeField, Min(0f)] private float _baseRange;
 
+        public string DefinitionId => _definitionId;
         public string Name => _name;
         public int Cost => _cost;
+        public TowerRace Race => _race;
+        public TowerRole Role => _role;
+        public float BaseAttack => _baseAttack;
+        public float BaseAttackInterval => _baseAttackInterval;
+        public float BaseRange => _baseRange;
 
         /// <summary>
-        /// Creates a named shape with occupied cells, attack anchor, and purchase cost.
+        /// Creates a tower definition with footprint, identity, combat role, and base attack values.
         /// </summary>
-        public TowerShape(string name, Vector2Int[] cells, Vector2Int anchor, int cost = 1)
+        public TowerShape(string name, Vector2Int[] cells, Vector2Int anchor, int cost = 1,
+            string definitionId = "", TowerRace race = TowerRace.Stone, TowerRole role = TowerRole.Mortar,
+            float baseAttack = 0f, float baseAttackInterval = 1f, float baseRange = 0f)
         {
+            _definitionId = string.IsNullOrWhiteSpace(definitionId) ? name : definitionId;
             _name = name;
             _cells = cells;
             _anchor = anchor;
             _cost = cost;
+            _race = race;
+            _role = role;
+            _baseAttack = baseAttack;
+            _baseAttackInterval = Mathf.Max(0.01f, baseAttackInterval);
+            _baseRange = baseRange;
         }
 
         /// <summary>

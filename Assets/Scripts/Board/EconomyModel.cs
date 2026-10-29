@@ -58,6 +58,14 @@ namespace BackpackDefense
         public PlacedTower Placement => _placement;
 
         /// <summary>
+        /// Returns the configured damage multiplier for a current or hypothetical feed count.
+        /// </summary>
+        public float DamageMultiplierAt(int feedCount)
+        {
+            return 1f + _feedAttackStep * Mathf.Clamp(feedCount, 0, 5);
+        }
+
+        /// <summary>
         /// Creates a pristine tower of the given catalog type and purchase price.
         /// </summary>
         internal TowerUnit(int typeIndex, int price, float feedAttackStep)

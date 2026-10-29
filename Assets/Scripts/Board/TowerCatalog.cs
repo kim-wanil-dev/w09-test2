@@ -16,15 +16,24 @@ namespace BackpackDefense
         {
             return new[]
             {
-                new TowerShape("Stone Mortar", new[] { V(0,0), V(1,0), V(0,1), V(1,1), V(0,2), V(1,2) }, V(0,1), 1),
-                new TowerShape("Stone Sniper", new[] { V(0,0), V(1,0), V(0,1), V(0,2), V(0,3) }, V(0,1), 2),
-                new TowerShape("Stone Tuner", new[] { V(0,0), V(1,0), V(1,1), V(2,1), V(2,2) }, V(1,1), 3),
-                new TowerShape("Fungal Mortar", new[] { V(0,0), V(1,0), V(2,0), V(1,1), V(1,2) }, V(1,0), 2),
-                new TowerShape("Fungal Sniper", new[] { V(0,0), V(1,0), V(1,1), V(1,2), V(2,2) }, V(1,1), 3),
-                new TowerShape("Fungal Tuner", new[] { V(0,0), V(1,0), V(2,0), V(3,0), V(4,0) }, V(2,0), 1),
-                new TowerShape("Resonant Mortar", new[] { V(0,0), V(1,0), V(2,0), V(0,1), V(2,1) }, V(1,0), 3),
-                new TowerShape("Resonant Sniper", new[] { V(0,0), V(1,0), V(2,0), V(3,0), V(4,0), V(5,0) }, V(2,0), 1),
-                new TowerShape("Resonant Tuner", new[] { V(0,0), V(1,0), V(0,1), V(1,1), V(0,2) }, V(0,1), 2)
+                new TowerShape("Stone Mortar", new[] { V(0,0), V(1,0), V(0,1), V(1,1), V(0,2), V(1,2) }, V(0,1), 1,
+                    "stone_mortar", TowerRace.Stone, TowerRole.Mortar, 8f, 1.50f, 2.50f),
+                new TowerShape("Stone Sniper", new[] { V(0,0), V(1,0), V(0,1), V(0,2), V(0,3) }, V(0,1), 2,
+                    "stone_sniper", TowerRace.Stone, TowerRole.Sniper, 24f, 1.20f, 3.00f),
+                new TowerShape("Stone Tuner", new[] { V(0,0), V(1,0), V(1,1), V(2,1), V(2,2) }, V(1,1), 3,
+                    "stone_tuner", TowerRace.Stone, TowerRole.Tuner, 13f, 1.00f, 2.25f),
+                new TowerShape("Fungal Mortar", new[] { V(0,0), V(1,0), V(2,0), V(1,1), V(1,2) }, V(1,0), 2,
+                    "fungal_mortar", TowerRace.Fungal, TowerRole.Mortar, 16f, 1.50f, 2.50f),
+                new TowerShape("Fungal Sniper", new[] { V(0,0), V(1,0), V(1,1), V(1,2), V(2,2) }, V(1,1), 3,
+                    "fungal_sniper", TowerRace.Fungal, TowerRole.Sniper, 38f, 1.20f, 3.00f),
+                new TowerShape("Fungal Tuner", new[] { V(0,0), V(1,0), V(2,0), V(3,0), V(4,0) }, V(2,0), 1,
+                    "fungal_tuner", TowerRace.Fungal, TowerRole.Tuner, 4f, 1.00f, 2.25f),
+                new TowerShape("Resonant Mortar", new[] { V(0,0), V(1,0), V(2,0), V(0,1), V(2,1) }, V(1,0), 3,
+                    "resonant_mortar", TowerRace.Resonant, TowerRole.Mortar, 26f, 1.50f, 2.50f),
+                new TowerShape("Resonant Sniper", new[] { V(0,0), V(1,0), V(2,0), V(3,0), V(4,0), V(5,0) }, V(2,0), 1,
+                    "resonant_sniper", TowerRace.Resonant, TowerRole.Sniper, 12f, 1.20f, 3.00f),
+                new TowerShape("Resonant Tuner", new[] { V(0,0), V(1,0), V(0,1), V(1,1), V(0,2) }, V(0,1), 2,
+                    "resonant_tuner", TowerRace.Resonant, TowerRole.Tuner, 8f, 1.00f, 2.25f)
             };
         }
 

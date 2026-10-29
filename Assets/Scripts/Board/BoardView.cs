@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text;
 
 using UnityEngine;
 
@@ -20,6 +21,9 @@ namespace BackpackDefense
         [SerializeField] private EconomySettings _economySettings = new EconomySettings();
         [SerializeField] private int _shopSeed = 42;
 
+        [Header("Synergy")]
+        [SerializeField] private SynergySettings _synergySettings = new SynergySettings();
+
         [Header("Towers")]
         [SerializeField] private List<TowerShape> _towerDefinitions = new List<TowerShape>(TowerCatalog.CreateShapes());
 
@@ -35,6 +39,7 @@ namespace BackpackDefense
         private TextMeshProUGUI _status;
         private TextMeshProUGUI _economyStatus;
         private TextMeshProUGUI _selectedStatus;
+        private TextMeshProUGUI _synergyStatus;
         private TMP_FontAsset _font;
         private TowerUnit _selectedUnit;
         private TowerUnit _material;
@@ -106,7 +111,8 @@ namespace BackpackDefense
                     valid = false;
                     reason = "Deployment limit reached";
                 }
-                Refresh(path, valid, shape.GetCells(anchor, _rotation));
+                PlacedTower previewPlacement = valid ? new PlacedTower(shape, anchor, _rotation) : null;
+                Refresh(path, valid, shape.GetCells(anchor, _rotation), previewPlacement);
                 if (anchor.x >= 0 && anchor.x < BoardModel.WIDTH && anchor.y >= 0 && anchor.y < BoardModel.HEIGHT)
                     _anchorLabels[anchor.x, anchor.y].text = "A";
                 _status.text = valid ? "Drag to place / R: rotate / Esc: cancel  |  Path: " + (path.Count - 1) : reason;
@@ -188,7 +194,20 @@ namespace BackpackDefense
                 () => { _isFeeding = _selectedUnit != null && _selectedUnit.FeedCount < 5; _material = null; Refresh(null, false, null); if (!_isFeeding) _status.text = "Select a tower below 3 stars first"; }).text = "SELECT MATERIAL";
             CreateButton(canvas.transform, new Vector2(650, 10), new Vector2(260, 48), ConfirmFeed).text = "CONFIRM FEED";
             _economyStatus = CreateText(CreateRect(canvas.transform, "Economy Status", new Vector2(1000, 50), new Vector2(0, 410)), "", 24);
-            _selectedStatus = CreateText(CreateRect(canvas.transform, "Selected Status", new Vector2(420, 130), new Vector2(650, -100)), "", 20);
+            RectTransform synergyRect = CreateRect(canvas.transform, "Synergy Status", new Vector2(500, 280), new Vector2(-650, -275));
+            UnityEngine.UI.Image synergyBackground = synergyRect.gameObject.AddComponent<UnityEngine.UI.Image>();
+            synergyBackground.color = new Color(0.08f, 0.10f, 0.14f, 0.92f);
+            synergyBackground.raycastTarget = false;
+            _synergyStatus = CreateText(synergyRect, "", 18);
+            _synergyStatus.alignment = TextAlignmentOptions.TopLeft;
+            _synergyStatus.margin = new Vector4(12f, 10f, 10f, 8f);
+            RectTransform selectedRect = CreateRect(canvas.transform, "Selected Status", new Vector2(460, 360), new Vector2(710, -240));
+            UnityEngine.UI.Image selectedBackground = selectedRect.gameObject.AddComponent<UnityEngine.UI.Image>();
+            selectedBackground.color = new Color(0.08f, 0.10f, 0.14f, 0.92f);
+            selectedBackground.raycastTarget = false;
+            _selectedStatus = CreateText(selectedRect, "", 18);
+            _selectedStatus.alignment = TextAlignmentOptions.TopLeft;
+            _selectedStatus.margin = new Vector4(12f, 10f, 10f, 8f);
             RectTransform statusRect = CreateRect(canvas.transform, "Status", new Vector2(1400, 70), new Vector2(0, -430));
             _status = CreateText(statusRect, "", 24);
         }
@@ -408,8 +427,28 @@ namespace BackpackDefense
         /// <summary>
         /// Renders the committed board or a valid/invalid placement candidate and updates the path indicator.
         /// </summary>
-        private void Refresh(List<Vector2Int> previewPath, bool valid, List<Vector2Int> previewCells)
+        private void Refresh(List<Vector2Int> previewPath, bool valid, List<Vector2Int> previewCells,
+            PlacedTower previewPlacement = null)
         {
+            List<Vector2Int> committedPath = _board.GetPath();
+            BoardSynergyEvaluation committedEvaluation = SynergyEvaluator.Evaluate(
+                _economy.Units, _shapes, committedPath, _synergySettings);
+            BoardSynergyEvaluation shownEvaluation = committedEvaluation;
+            bool isSynergyPreview = false;
+            if (previewPlacement != null && valid && _selectedUnit != null)
+            {
+                shownEvaluation = SynergyEvaluator.Evaluate(_economy.Units, _shapes,
+                    previewPath ?? committedPath, _synergySettings, _selectedUnit, previewPlacement);
+                isSynergyPreview = true;
+            }
+            else if (_isFeeding && _material != null && _selectedUnit != null)
+            {
+                shownEvaluation = SynergyEvaluator.Evaluate(_economy.Units, _shapes,
+                    previewPath ?? committedPath, _synergySettings, feedTarget: _selectedUnit,
+                    consumedMaterial: _material);
+                isSynergyPreview = true;
+            }
+
             for (int x = 0; x < BoardModel.WIDTH; x++)
             for (int y = 0; y < BoardModel.HEIGHT; y++)
             {
@@ -424,8 +463,11 @@ namespace BackpackDefense
                 if (_isDragging && tower == _moving) continue;
                 if (_isFeeding && _material?.Placement == tower && previewPath != null) continue;
                 bool isEligible = _isFeeding && _economy.CanFeed(_selectedUnit, _economy.FindUnit(tower));
+                TowerUnit unit = _economy.FindUnit(tower);
+                Color towerColor = isEligible ? new Color(0.32f, 0.65f, 0.38f) : GetTowerRaceColor(tower.Shape.Race);
+                if (unit == _selectedUnit) towerColor = Color.Lerp(towerColor, Color.white, 0.22f);
                 foreach (Vector2Int point in tower.Shape.GetCells(tower.Position, tower.Rotation))
-                    _cells[point.x, point.y].color = isEligible ? new Color(0.32f, 0.65f, 0.38f) : new Color(0.55f, 0.42f, 0.28f);
+                    _cells[point.x, point.y].color = towerColor;
                 _anchorLabels[tower.Position.x, tower.Position.y].text = isEligible ? "A+" : "A";
             }
             if (previewCells != null)
@@ -451,12 +493,176 @@ namespace BackpackDefense
                 }
                 _economyStatus.text = "Gold: " + _economy.Gold + "   Level: " + _economy.Level + "   Deployed: " + _board.Towers.Count + "/" + _economy.Level +
                     "   Level cost: " + (_economy.LevelCost == 0 ? "MAX" : _economy.LevelCost.ToString()) + "   Shop: " + (_economy.IsLocked ? "LOCKED" : "OPEN");
-                string progress = _selectedUnit == null ? "" : _selectedUnit.FeedCount < 2 ? _selectedUnit.FeedCount + "/2" :
-                    _selectedUnit.FeedCount < 5 ? (_selectedUnit.FeedCount - 2) + "/3" : "MAX";
-                _selectedStatus.text = _selectedUnit == null ? "Select a tower" : _shapes[_selectedUnit.TypeIndex].Name + "\n" + _selectedUnit.Star +
-                    "*  Progress: " + progress + "\nDamage multiplier: " + _selectedUnit.DamageMultiplier.ToString("0.0") +
-                    "\nRefund: " + _selectedUnit.InvestedGold;
                 _status.text = _isFeeding ? "Choose material, then CONFIRM FEED. Esc: cancel." : "Drag a bench tower to the board. R: rotate. Right-click: select.";
+            }
+
+            _synergyStatus.text = BuildSynergySummary(committedEvaluation, shownEvaluation, isSynergyPreview);
+            _selectedStatus.text = BuildSelectedStatus(committedEvaluation, shownEvaluation, isSynergyPreview);
+        }
+
+        /// <summary>
+        /// Builds the global type counts and lists every tower changed by the current layout preview.
+        /// </summary>
+        private string BuildSynergySummary(BoardSynergyEvaluation committed, BoardSynergyEvaluation shown, bool isPreview)
+        {
+            var text = new StringBuilder();
+            text.AppendLine(isPreview ? "SYNERGY PREVIEW" : "BOARD SYNERGY");
+            text.Append("Race types | ");
+            for (int i = 0; i < 3; i++)
+            {
+                TowerRace race = (TowerRace)i;
+                if (i > 0) text.Append("  ");
+                int count = shown.GetRaceTypeCount(race);
+                float bonus = shown.GetRaceGlobalAttackBonus(race);
+                text.Append(SynergyEvaluator.GetRaceName(race)).Append(' ').Append(count).Append('/')
+                    .Append(_synergySettings.ThirdTierTypeCount);
+                if (bonus > 0f) text.Append(" (+").Append(Mathf.RoundToInt(bonus * 100f)).Append("% ATK)");
+            }
+            text.AppendLine();
+            text.Append("Role types | ");
+            for (int i = 0; i < 3; i++)
+            {
+                TowerRole role = (TowerRole)i;
+                if (i > 0) text.Append("  ");
+                int count = shown.GetRoleTypeCount(role);
+                float bonus = shown.GetRoleGlobalAttackSpeedBonus(role);
+                text.Append(SynergyEvaluator.GetRoleName(role)).Append(' ').Append(count).Append('/')
+                    .Append(_synergySettings.ThirdTierTypeCount);
+                if (bonus > 0f) text.Append(" (+").Append(Mathf.RoundToInt(bonus * 100f)).Append("% AS)");
+            }
+
+            if (isPreview)
+            {
+                text.AppendLine();
+                text.AppendLine("Changed towers:");
+                bool hasChanges = false;
+                foreach (TowerSynergyStats stats in shown.Towers)
+                {
+                    TowerSynergyStats previous = committed.GetStats(stats.Unit);
+                    string change = BuildStatDelta(previous, stats);
+                    if (change.Length == 0) continue;
+                    if (hasChanges) text.AppendLine();
+                    text.Append(stats.Definition.Name).Append(": ").Append(change);
+                    hasChanges = true;
+                }
+                if (!hasChanges) text.AppendLine().Append("No deployed stats change.");
+            }
+
+            return text.ToString();
+        }
+
+        /// <summary>
+        /// Formats the selected tower's resolved stats, current feed state, and active source list.
+        /// </summary>
+        private string BuildSelectedStatus(BoardSynergyEvaluation committed, BoardSynergyEvaluation shown, bool isPreview)
+        {
+            if (_selectedUnit == null) return "Select a tower";
+
+            TowerShape shape = _shapes[_selectedUnit.TypeIndex];
+            TowerSynergyStats stats = shown.GetStats(_selectedUnit);
+            TowerSynergyStats previous = committed.GetStats(_selectedUnit);
+            int feedCount = _selectedUnit.FeedCount;
+            bool isFeedPreview = _isFeeding && _material != null;
+            if (isFeedPreview && _selectedUnit.FeedCount < 5) feedCount++;
+            string progress = feedCount < 2 ? feedCount + "/2" : feedCount < 5 ? (feedCount - 2) + "/3" : "MAX";
+            int displayedStar = feedCount < 2 ? 1 : feedCount < 5 ? 2 : 3;
+            var text = new StringBuilder();
+            text.Append(shape.Name).Append(" | ").Append(SynergyEvaluator.GetRaceName(shape.Race)).Append(" / ")
+                .Append(SynergyEvaluator.GetRoleName(shape.Role));
+            if (isPreview) text.Append(" | PREVIEW");
+            text.AppendLine();
+            text.Append(isFeedPreview ? "Star " + _selectedUnit.Star + " -> " + displayedStar : "Star " + _selectedUnit.Star)
+                .Append(" | Feed ").Append(progress)
+                .Append(" | Refund ").Append(_selectedUnit.InvestedGold);
+
+            if (stats == null)
+            {
+                text.AppendLine();
+                text.Append("Not deployed | Base attack ").Append(shape.BaseAttack.ToString("0.0"))
+                    .Append(" | Damage multiplier x").Append(_selectedUnit.DamageMultiplierAt(feedCount).ToString("0.00"));
+                return text.ToString();
+            }
+
+            text.AppendLine();
+            text.Append("Attack ").Append(stats.Attack.ToString("0.0"))
+                .Append(" | Attack speed x").Append(stats.AttackSpeedMultiplier.ToString("0.00"));
+            text.AppendLine();
+            text.Append("Interval ").Append(stats.AttackInterval.ToString("0.00")).Append("s | Range ")
+                .Append(stats.Range.ToString("0.00"));
+            if (shape.Role == TowerRole.Mortar) text.Append(" | Blast ").Append(stats.BlastRadius.ToString("0.00"));
+            text.AppendLine();
+            text.Append("Neighbors ").Append(stats.AdjacentTowerCount).Append(" | Same-race ")
+                .Append(stats.SameRaceNeighborCount).Append(" | Cluster ").Append(stats.RaceClusterSize);
+            text.AppendLine();
+            text.Append("Path C ").Append(stats.PathContactCells).Append(" | Gap D ").Append(stats.PathGap);
+
+            if (isPreview && previous != null)
+            {
+                string change = BuildStatDelta(previous, stats);
+                if (change.Length > 0) text.AppendLine().Append("Change: ").Append(change);
+            }
+
+            text.AppendLine();
+            text.AppendLine("Sources:");
+            foreach (string source in stats.Sources)
+                text.Append("• ").AppendLine(source);
+            return text.ToString();
+        }
+
+        /// <summary>
+        /// Returns changed combat values and spatial relationship counts for one tower.
+        /// </summary>
+        private static string BuildStatDelta(TowerSynergyStats previous, TowerSynergyStats current)
+        {
+            if (previous == null)
+                return "new | ATK " + current.Attack.ToString("0.0") + " | AS x" +
+                    current.AttackSpeedMultiplier.ToString("0.00") + " | Range " + current.Range.ToString("0.00");
+
+            var changes = new StringBuilder();
+            AppendStatDelta(changes, "ATK", previous.Attack, current.Attack);
+            AppendStatDelta(changes, "AS", previous.AttackSpeedMultiplier, current.AttackSpeedMultiplier);
+            AppendStatDelta(changes, "Interval", previous.AttackInterval, current.AttackInterval);
+            AppendStatDelta(changes, "Range", previous.Range, current.Range);
+            AppendStatDelta(changes, "Blast", previous.BlastRadius, current.BlastRadius);
+            AppendIntegerDelta(changes, "Links", previous.AdjacentTowerCount, current.AdjacentTowerCount);
+            AppendIntegerDelta(changes, "Cluster", previous.RaceClusterSize, current.RaceClusterSize);
+            AppendIntegerDelta(changes, "C", previous.PathContactCells, current.PathContactCells);
+            AppendIntegerDelta(changes, "D", previous.PathGap, current.PathGap);
+            return changes.ToString();
+        }
+
+        /// <summary>
+        /// Appends a formatted numeric change when two combat values differ.
+        /// </summary>
+        private static void AppendStatDelta(StringBuilder changes, string label, float previous, float current)
+        {
+            if (Mathf.Abs(previous - current) < 0.001f) return;
+            if (changes.Length > 0) changes.Append(" | ");
+            changes.Append(label).Append(' ').Append(previous.ToString("0.0")).Append("->")
+                .Append(current.ToString("0.0"));
+        }
+
+        /// <summary>
+        /// Appends a formatted integer change when two spatial counts differ.
+        /// </summary>
+        private static void AppendIntegerDelta(StringBuilder changes, string label, int previous, int current)
+        {
+            if (previous == current) return;
+            if (changes.Length > 0) changes.Append(" | ");
+            changes.Append(label).Append(' ').Append(previous).Append("->").Append(current);
+        }
+
+        /// <summary>
+        /// Returns the 2D fill color used to distinguish each race on the board.
+        /// </summary>
+        private static Color GetTowerRaceColor(TowerRace race)
+        {
+            switch (race)
+            {
+                case TowerRace.Stone: return new Color(0.58f, 0.49f, 0.35f);
+                case TowerRace.Fungal: return new Color(0.30f, 0.53f, 0.34f);
+                case TowerRace.Resonant: return new Color(0.38f, 0.40f, 0.72f);
+                default: return new Color(0.55f, 0.42f, 0.28f);
             }
         }
     }
