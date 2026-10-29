@@ -344,6 +344,52 @@ namespace BackpackDefense
     }
 
     /// <summary>
+    /// Identifies the visual stage of one tower attack without changing its combat resolution.
+    /// </summary>
+    public enum CombatVisualEventType
+    {
+        ProjectileLaunched,
+        EnemyHit,
+        AreaImpact
+    }
+
+    /// <summary>
+    /// Carries the positions and damage needed to render a tower attack and its impact.
+    /// </summary>
+    public sealed class CombatVisualEvent
+    {
+        public CombatVisualEventType Type { get; }
+        public int Sequence { get; }
+        public int SourceTowerIndex { get; }
+        public int TargetEnemySequence { get; }
+        public Vector2 SourcePosition { get; }
+        public Vector2 Position { get; }
+        public float Damage { get; }
+        public float BlastRadius { get; }
+        public float TravelTime { get; }
+        public bool IsMortar { get; }
+
+        /// <summary>
+        /// Captures one presentation event using immutable launch-time or impact-time values.
+        /// </summary>
+        internal CombatVisualEvent(CombatVisualEventType type, int sequence, int sourceTowerIndex,
+            int targetEnemySequence, Vector2 sourcePosition, Vector2 position, float damage,
+            float blastRadius, float travelTime, bool isMortar)
+        {
+            Type = type;
+            Sequence = sequence;
+            SourceTowerIndex = sourceTowerIndex;
+            TargetEnemySequence = targetEnemySequence;
+            SourcePosition = sourcePosition;
+            Position = position;
+            Damage = damage;
+            BlastRadius = blastRadius;
+            TravelTime = travelTime;
+            IsMortar = isMortar;
+        }
+    }
+
+    /// <summary>
     /// Summarizes one completed wave and its economy reward.
     /// </summary>
     public sealed class WaveReport
@@ -422,6 +468,7 @@ namespace BackpackDefense
         private readonly int _seed;
         private readonly List<EnemyInstance> _enemies = new List<EnemyInstance>();
         private readonly List<PendingAttack> _pendingAttacks = new List<PendingAttack>();
+        private readonly List<CombatVisualEvent> _visualEvents = new List<CombatVisualEvent>();
         private readonly List<ScheduledSpawn> _scheduledSpawns = new List<ScheduledSpawn>();
         private TowerRuntime[] _towerRuntime = new TowerRuntime[0];
         private int[] _towerAttackCounts = new int[0];
@@ -430,7 +477,7 @@ namespace BackpackDefense
         private double _simulationTime;
         private int _nextSpawnIndex;
         private int _nextEnemySequence;
-        private int _nextImpactSequence;
+        private int _nextVisualSequence;
         private int _kills;
         private int _leaks;
         private int _baseDamage;
@@ -450,6 +497,7 @@ namespace BackpackDefense
         public int Seed => _seed;
         public IReadOnlyList<EnemyInstance> Enemies => _enemies;
         public IReadOnlyList<PendingAttack> PendingAttacks => _pendingAttacks;
+        public IReadOnlyList<CombatVisualEvent> VisualEvents => _visualEvents;
         public WaveSnapshot Snapshot { get; private set; }
         public WaveReport LastReport { get; private set; }
 
@@ -485,7 +533,8 @@ namespace BackpackDefense
             _scheduledSpawns.Clear();
             _nextSpawnIndex = 0;
             _nextEnemySequence = 0;
-            _nextImpactSequence = 0;
+            _nextVisualSequence = 0;
+            _visualEvents.Clear();
             _simulationTime = 0d;
             _accumulator = 0d;
             _kills = 0;
@@ -516,6 +565,14 @@ namespace BackpackDefense
                 advanced = true;
             }
             return advanced;
+        }
+
+        /// <summary>
+        /// Removes presentation events after the view has rendered them.
+        /// </summary>
+        public void ClearVisualEvents()
+        {
+            _visualEvents.Clear();
         }
 
         /// <summary>
@@ -635,12 +692,18 @@ namespace BackpackDefense
                 if (target == null) continue;
                 runtime.NextAttackTime = _simulationTime + Math.Max(0.01d, tower.AttackInterval);
                 _towerAttackCounts[tower.Index]++;
-                if (tower.Role == TowerRole.Mortar)
+                int sequence = _nextVisualSequence++;
+                bool isMortar = tower.Role == TowerRole.Mortar;
+                _visualEvents.Add(new CombatVisualEvent(CombatVisualEventType.ProjectileLaunched,
+                    sequence, tower.Index, target.Sequence, tower.Anchor, target.Position,
+                    tower.Attack, tower.BlastRadius,
+                    isMortar ? _settings.MortarTravelTime : 0.14f, isMortar));
+                if (isMortar)
                 {
-                    _pendingAttacks.Add(new PendingAttack(_nextImpactSequence++, tower.Index, target.Position,
+                    _pendingAttacks.Add(new PendingAttack(sequence, tower.Index, target.Position,
                         tower.BlastRadius, tower.Attack, _simulationTime + _settings.MortarTravelTime));
                 }
-                else ApplyDamage(target, tower.Index, tower.Attack);
+                else ApplyDamage(target, tower.Index, tower.Attack, sequence, isMortar: false);
             }
         }
 
@@ -681,20 +744,29 @@ namespace BackpackDefense
                     continue;
                 }
                 _pendingAttacks.RemoveAt(index);
+                _visualEvents.Add(new CombatVisualEvent(CombatVisualEventType.AreaImpact,
+                    impact.Sequence, impact.SourceTowerIndex, -1, Vector2.zero, impact.ImpactPoint,
+                    0f, impact.BlastRadius, 0f, isMortar: true));
                 foreach (EnemyInstance enemy in _enemies)
                     if (enemy.IsAlive && Vector2.Distance(enemy.Position, impact.ImpactPoint) <= impact.BlastRadius)
-                        ApplyDamage(enemy, impact.SourceTowerIndex, impact.Damage);
+                        ApplyDamage(enemy, impact.SourceTowerIndex, impact.Damage,
+                            impact.Sequence, isMortar: true);
             }
         }
 
         /// <summary>
         /// Applies damage and records a kill exactly once when health reaches zero.
         /// </summary>
-        private void ApplyDamage(EnemyInstance enemy, int sourceTowerIndex, float damage)
+        private void ApplyDamage(EnemyInstance enemy, int sourceTowerIndex, float damage,
+            int visualSequence, bool isMortar)
         {
             if (!enemy.IsAlive) return;
             bool wasAlive = enemy.IsAlive;
             float appliedDamage = enemy.TakeDamage(damage);
+            if (appliedDamage > 0f)
+                _visualEvents.Add(new CombatVisualEvent(CombatVisualEventType.EnemyHit,
+                    visualSequence, sourceTowerIndex, enemy.Sequence, Vector2.zero,
+                    enemy.Position, appliedDamage, 0f, 0f, isMortar));
             if (sourceTowerIndex >= 0 && sourceTowerIndex < _towerDamageDealt.Length)
                 _towerDamageDealt[sourceTowerIndex] += appliedDamage;
             if (wasAlive && !enemy.IsAlive) _kills++;

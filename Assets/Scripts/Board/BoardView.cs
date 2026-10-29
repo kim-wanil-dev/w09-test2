@@ -39,6 +39,10 @@ namespace BackpackDefense
         private readonly List<UnityEngine.UI.Button> _economyButtons = new List<UnityEngine.UI.Button>();
         private readonly Dictionary<int, EnemyMarker> _enemyMarkers = new Dictionary<int, EnemyMarker>();
         private readonly Dictionary<int, RectTransform> _impactMarkers = new Dictionary<int, RectTransform>();
+        private readonly Dictionary<int, ProjectileVisual> _projectileBySequence = new Dictionary<int, ProjectileVisual>();
+        private readonly List<ProjectileVisual> _projectileVisuals = new List<ProjectileVisual>();
+        private readonly List<ImpactVisual> _impactVisuals = new List<ImpactVisual>();
+        private readonly List<FloatingDamageVisual> _floatingDamageVisuals = new List<FloatingDamageVisual>();
         private readonly HashSet<int> _activeEnemyIds = new HashSet<int>();
         private readonly List<int> _removedEnemyIds = new List<int>();
         private readonly HashSet<int> _activeImpactIds = new HashSet<int>();
@@ -90,17 +94,77 @@ namespace BackpackDefense
             public RectTransform HealthFill;
         }
 
+        private sealed class ProjectileVisual
+        {
+            public int Sequence;
+            public int TargetEnemySequence;
+            public RectTransform Beam;
+            public UnityEngine.UI.Image BeamImage;
+            public RectTransform Head;
+            public UnityEngine.UI.Image HeadImage;
+            public Vector2 Source;
+            public Vector2 Target;
+            public float Elapsed;
+            public float Duration;
+            public float Damage;
+            public float BlastRadius;
+            public bool IsMortar;
+        }
+
+        private sealed class ImpactVisual
+        {
+            public RectTransform Rect;
+            public UnityEngine.UI.Image Image;
+            public Vector2 Position;
+            public float StartSize;
+            public float EndSize;
+            public float Elapsed;
+            public float Duration;
+            public Color Color;
+        }
+
+        private sealed class FloatingDamageVisual
+        {
+            public RectTransform Rect;
+            public TextMeshProUGUI Label;
+            public Vector2 StartPosition;
+            public float Elapsed;
+            public float Duration;
+        }
+
         void Start()
         {
+            _towerDefinitions = LocalizeTowerDefinitions(_towerDefinitions);
             _shapes = _towerDefinitions;
             _activeSeed = _shopSeed;
             _board = new BoardModel();
             _economy = new EconomyModel(_board, _shapes, _activeSeed, _economySettings);
             _combat = new CombatModel(_activeSeed, _combatSettings);
-            _font = Resources.Load<TMP_FontAsset>("Fonts & Materials/LiberationSans SDF");
+            _font = CreateKoreanFontAsset();
+            if (_font == null) _font = Resources.Load<TMP_FontAsset>("Fonts & Materials/LiberationSans SDF");
             if (_font == null) _font = TMP_Settings.defaultFontAsset;
             CreateInterface();
             HandlePhaseChange();
+        }
+
+        /// <summary>
+        /// Rebuilds serialized tower definitions with Korean display names while preserving their stats and shapes.
+        /// </summary>
+        private static List<TowerShape> LocalizeTowerDefinitions(IReadOnlyList<TowerShape> definitions)
+        {
+            var localized = new List<TowerShape>(definitions == null ? 0 : definitions.Count);
+            if (definitions == null) return localized;
+            foreach (TowerShape definition in definitions)
+            {
+                if (definition == null) continue;
+                List<Vector2Int> cellsFromAnchor = definition.GetCells(Vector2Int.zero, 0);
+                string name = SynergyEvaluator.GetRaceName(definition.Race) + " " +
+                    SynergyEvaluator.GetRoleName(definition.Role);
+                localized.Add(new TowerShape(name, cellsFromAnchor.ToArray(), Vector2Int.zero,
+                    definition.Cost, definition.DefinitionId, definition.Race, definition.Role,
+                    definition.BaseAttack, definition.BaseAttackInterval, definition.BaseRange));
+            }
+            return localized;
         }
 
         void Update()
@@ -108,6 +172,8 @@ namespace BackpackDefense
             if (_combat == null) return;
             bool advanced = _combat.Advance(Time.unscaledDeltaTime);
             if (advanced) RenderCombatEntities();
+            ProcessCombatVisualEvents();
+            UpdateCombatVisuals(Time.unscaledDeltaTime);
             if (!_hasDisplayedPhase || _displayedPhase != _combat.Phase) HandlePhaseChange();
             UpdateCombatHud();
             if (Mouse.current == null || Keyboard.current == null) return;
@@ -182,7 +248,7 @@ namespace BackpackDefense
                     if (_moving == null && _board.Towers.Count >= _economy.Level)
                     {
                         _previewValid = false;
-                        _previewReason = "Deployment limit reached";
+                        _previewReason = "배치 한도에 도달했습니다.";
                     }
                     _previewAnchor = anchor;
                     _previewRotation = _rotation;
@@ -194,9 +260,9 @@ namespace BackpackDefense
                     PlacedTower previewPlacement = _previewValid ? new PlacedTower(shape, anchor, _rotation) : null;
                     Refresh(_previewPath, _previewValid, _previewCells, previewPlacement);
                     if (anchor.x >= 0 && anchor.x < BoardModel.WIDTH && anchor.y >= 0 && anchor.y < BoardModel.HEIGHT)
-                        _anchorLabels[anchor.x, anchor.y].text = "A";
+                        _anchorLabels[anchor.x, anchor.y].text = "포";
                     _status.text = _previewValid
-                        ? "Drag to place / R: rotate / Esc: cancel  |  Path: " + (_previewPath.Count - 1)
+                        ? "드래그: 배치  |  R 키: 회전  |  에스케이프 키: 취소  |  경로 길이: " + (_previewPath.Count - 1)
                         : _previewReason;
                 }
             }
@@ -204,7 +270,7 @@ namespace BackpackDefense
             {
                 _hasPreviewCache = false;
                 Refresh(null, false, null);
-                _status.text = "Outside the board";
+                _status.text = "보드 바깥입니다.";
             }
             if (_isDragging && Mouse.current.leftButton.wasReleasedThisFrame)
             {
@@ -215,7 +281,7 @@ namespace BackpackDefense
                 _hasPreviewCache = false;
                 Refresh(null, false, null);
                 if (!placed) _status.text = string.IsNullOrEmpty(failure)
-                    ? "Placement rejected; the previous board state was restored" : failure;
+                    ? "배치할 수 없어 이전 상태로 되돌렸습니다." : failure;
             }
             if (!_isDragging && onBoard && Mouse.current.rightButton.wasPressedThisFrame)
             {
@@ -261,9 +327,9 @@ namespace BackpackDefense
             {
                 int index = i;
                 _shopLabels[i] = CreateButton(canvas.transform, new Vector2(-650, 250 - i * 65), new Vector2(300, 58),
-                    () => { CancelFeed(); bool success = _economy.Buy(index); Refresh(null, false, null); if (!success) _status.text = "Purchase unavailable: check gold, offer, or bench space"; });
+                    () => { CancelFeed(); bool success = _economy.Buy(index); Refresh(null, false, null); if (!success) _status.text = "구매할 수 없습니다. 골드, 판매 목록, 대기석 공간을 확인하세요."; });
                 CreateButton(canvas.transform, new Vector2(-470, 250 - i * 65), new Vector2(40, 58),
-                    () => { CancelFeed(); if (_economy.Offers[index] >= 0) _shopRotations[index] = (_shopRotations[index] + 1) % 4; Refresh(null, false, null); }).text = "R";
+                    () => { CancelFeed(); if (_economy.Offers[index] >= 0) _shopRotations[index] = (_shopRotations[index] + 1) % 4; Refresh(null, false, null); }).text = "회";
             }
             for (int i = 0; i < _benchLabels.Length; i++)
             {
@@ -275,17 +341,17 @@ namespace BackpackDefense
                 dragHandler.Initialize(this, index);
             }
             CreateButton(canvas.transform, new Vector2(-650, -60), new Vector2(300, 48),
-                () => { CancelFeed(); bool success = _economy.Reroll(); if (success) System.Array.Clear(_shopRotations, 0, _shopRotations.Length); Refresh(null, false, null); if (!success) _status.text = "Reroll unavailable: unlock shop or obtain gold"; }).text = "REROLL (" + _economy.RerollCost + ")";
+                () => { CancelFeed(); bool success = _economy.Reroll(); if (success) System.Array.Clear(_shopRotations, 0, _shopRotations.Length); Refresh(null, false, null); if (!success) _status.text = "새 목록을 만들 수 없습니다. 상점 고정을 풀고 골드를 확인하세요."; }).text = "새로고침 (" + _economy.RerollCost + ")";
             CreateButton(canvas.transform, new Vector2(-650, -115), new Vector2(300, 48),
-                () => { CancelFeed(); _economy.ToggleLock(); Refresh(null, false, null); }).text = "TOGGLE LOCK";
+                () => { CancelFeed(); _economy.ToggleLock(); Refresh(null, false, null); }).text = "상점 고정 전환";
             CreateButton(canvas.transform, new Vector2(650, 250), new Vector2(260, 48),
-                () => { CancelFeed(); bool success = _economy.LevelUp(); Refresh(null, false, null); if (!success) _status.text = "Level up unavailable: maximum level or insufficient gold"; }).text = "LEVEL UP";
+                () => { CancelFeed(); bool success = _economy.LevelUp(); Refresh(null, false, null); if (!success) _status.text = "레벨을 올릴 수 없습니다. 최대 레벨 또는 골드를 확인하세요."; }).text = "레벨 업";
             CreateButton(canvas.transform, new Vector2(650, 190), new Vector2(260, 48),
-                () => { CancelFeed(); bool success = _selectedUnit != null && _economy.ReturnToBench(_selectedUnit); Refresh(null, false, null); if (!success) _status.text = "Select a deployed tower and make room on the bench"; }).text = "RETURN TO BENCH";
-            CreateButton(canvas.transform, new Vector2(650, 130), new Vector2(260, 48), SellSelected).text = "SELL";
+                () => { CancelFeed(); bool success = _selectedUnit != null && _economy.ReturnToBench(_selectedUnit); Refresh(null, false, null); if (!success) _status.text = "배치된 타워를 선택하고 대기석 공간을 비우세요."; }).text = "대기석으로 이동";
+            CreateButton(canvas.transform, new Vector2(650, 130), new Vector2(260, 48), SellSelected).text = "판매";
             CreateButton(canvas.transform, new Vector2(650, 70), new Vector2(260, 48),
-                () => { _isFeeding = _selectedUnit != null && _selectedUnit.FeedCount < 5; _material = null; Refresh(null, false, null); if (!_isFeeding) _status.text = "Select a tower below 3 stars first"; }).text = "SELECT MATERIAL";
-            CreateButton(canvas.transform, new Vector2(650, 10), new Vector2(260, 48), ConfirmFeed).text = "CONFIRM FEED";
+                () => { _isFeeding = _selectedUnit != null && _selectedUnit.FeedCount < 5; _material = null; Refresh(null, false, null); if (!_isFeeding) _status.text = "3성 미만 타워를 먼저 선택하세요."; }).text = "강화 재료 선택";
+            CreateButton(canvas.transform, new Vector2(650, 10), new Vector2(260, 48), ConfirmFeed).text = "재료 투입";
             _advanceLabel = CreateButton(canvas.transform, new Vector2(650, 420), new Vector2(260, 48), AdvancePhase, false);
             _advanceButton = _advanceLabel.GetComponentInParent<UnityEngine.UI.Button>();
             _pauseLabel = CreateButton(canvas.transform, new Vector2(650, 360), new Vector2(125, 48), ToggleCombatPause, false);
@@ -296,8 +362,8 @@ namespace BackpackDefense
             _retryButton = retryLabel.GetComponentInParent<UnityEngine.UI.Button>();
             TextMeshProUGUI newRunLabel = CreateButton(canvas.transform, new Vector2(650, 360), new Vector2(260, 48), StartNewSeed, false);
             _newRunButton = newRunLabel.GetComponentInParent<UnityEngine.UI.Button>();
-            retryLabel.text = "RETRY SAME SEED";
-            newRunLabel.text = "NEW RUN / SEED";
+            retryLabel.text = "같은 난수값으로 재도전";
+            newRunLabel.text = "새 게임 시작";
             _economyStatus = CreateText(CreateRect(canvas.transform, "Economy Status", new Vector2(1000, 50), new Vector2(0, 410)), "", 24);
             RectTransform synergyRect = CreateRect(canvas.transform, "Synergy Status", new Vector2(500, 280), new Vector2(-650, -275));
             UnityEngine.UI.Image synergyBackground = synergyRect.gameObject.AddComponent<UnityEngine.UI.Image>();
@@ -338,6 +404,7 @@ namespace BackpackDefense
         /// </summary>
         private void InitializeRun(int seed)
         {
+            ClearCombatVisuals();
             _activeSeed = seed;
             _board = new BoardModel();
             _economy = new EconomyModel(_board, _shapes, seed, _economySettings);
@@ -366,7 +433,7 @@ namespace BackpackDefense
                     _economy.Units, _shapes, _board.GetPath(), _synergySettings);
                 if (!_combat.StartWave(evaluation, _board.GetPath()))
                 {
-                    _status.text = "Wave could not start: check the board path and combat schedule";
+                    _status.text = "웨이브를 시작할 수 없습니다. 경로와 전투 일정을 확인하세요.";
                     return;
                 }
                 _isDragging = false;
@@ -435,15 +502,15 @@ namespace BackpackDefense
                 button.interactable = preparing;
             _advanceButton.gameObject.SetActive(preparing || showingResult);
             _advanceButton.interactable = preparing || showingResult;
-            _advanceLabel.text = preparing ? "START WAVE" : "NEXT WAVE";
+            _advanceLabel.text = preparing ? "웨이브 시작" : "다음 웨이브";
             _pauseButton.gameObject.SetActive(inCombat);
             _speedButton.gameObject.SetActive(inCombat);
             _retryButton.gameObject.SetActive(ended);
             _newRunButton.gameObject.SetActive(ended);
             _pauseButton.interactable = inCombat;
             _speedButton.interactable = inCombat;
-            _pauseLabel.text = _combat.IsPaused ? "RESUME" : "PAUSE";
-            _speedLabel.text = _combat.SimulationSpeed > 1.5f ? "2X" : "1X";
+            _pauseLabel.text = _combat.IsPaused ? "계속" : "일시 정지";
+            _speedLabel.text = _combat.SimulationSpeed > 1.5f ? "2배" : "1배";
         }
 
         /// <summary>
@@ -467,25 +534,25 @@ namespace BackpackDefense
             switch (_combat.Phase)
             {
                 case CombatPhase.Preparation:
-                    _status.text = "Preparation | Arrange towers, then START WAVE. Enter also starts the wave.";
+                    _status.text = "준비 단계 | 타워를 배치한 뒤 웨이브를 시작하세요. 엔터 키로도 시작할 수 있습니다.";
                     break;
                 case CombatPhase.Combat:
-                    _status.text = "Wave " + _combat.CurrentWave + " in progress | Space toggles pause. Board and economy are locked.";
+                    _status.text = _combat.CurrentWave + " 웨이브 진행 중 | 스페이스바로 일시 정지할 수 있습니다. 보드와 상점은 잠겨 있습니다.";
                     break;
                 case CombatPhase.WaveResult:
                     WaveReport report = _combat.LastReport;
-                    _status.text = "Wave " + report.WaveNumber + " clear | Path " + report.PathLength + " | Kills " + report.Kills + " | Leaks " +
-                        report.Leaks + " | Base -" + report.BaseDamage + " (" + report.RemainingBaseHealth + " HP) | +" +
-                        report.GoldReward + " gold after NEXT WAVE.";
+                    _status.text = report.WaveNumber + " 웨이브 완료 | 경로 " + report.PathLength + "칸 | 처치 " + report.Kills + " | 누수 " +
+                        report.Leaks + " | 기지 피해 " + report.BaseDamage + " (체력 " + report.RemainingBaseHealth + ") | 다음 웨이브 후 골드 +" +
+                        report.GoldReward;
                     break;
                 case CombatPhase.Victory:
-                    _status.text = "VICTORY | All " + _combat.WaveCount + " waves cleared with " +
-                        _combat.BaseHealth + " base HP. Retry this seed or start a new run.";
+                    _status.text = "승리 | " + _combat.WaveCount + "개 웨이브를 모두 막았습니다. 기지 체력 " +
+                        _combat.BaseHealth + ". 같은 난수값으로 재도전하거나 새 게임을 시작하세요.";
                     break;
                 case CombatPhase.Defeat:
                     string cause = _combat.DefeatCause == DefeatReason.BossReachedGoal
-                        ? "The boss reached the goal." : "Base health reached zero.";
-                    _status.text = "DEFEAT | " + cause + " Retry this seed or start a new run.";
+                        ? "우두머리가 목표에 도달했습니다." : "기지 체력이 모두 소진됐습니다.";
+                    _status.text = "패배 | " + cause + " 같은 난수값으로 재도전하거나 새 게임을 시작하세요.";
                     break;
             }
         }
@@ -500,11 +567,244 @@ namespace BackpackDefense
             int seconds = Mathf.FloorToInt((float)(_combat.SimulationTime % 60d));
             string time = minutes.ToString("00") + ":" + seconds.ToString("00");
             string phase = _combat.Phase == CombatPhase.Combat ? " | " + time + " | " +
-                (_combat.IsPaused ? "PAUSED" : (_combat.SimulationSpeed > 1.5f ? "2X" : "1X")) : "";
-            _economyStatus.text = "Wave " + _combat.CurrentWave + "/" + _combat.WaveCount + "   Base " +
-                _combat.BaseHealth + "/" + _combat.StartingBaseHealth + "   Gold " + _economy.Gold +
-                "   Level " + _economy.Level + "   Towers " + _board.Towers.Count + "/" + _economy.Level +
-                "   Seed " + _activeSeed + phase;
+                (_combat.IsPaused ? "일시 정지" : (_combat.SimulationSpeed > 1.5f ? "2배" : "1배")) : "";
+            _economyStatus.text = "웨이브 " + _combat.CurrentWave + "/" + _combat.WaveCount + "   기지 " +
+                _combat.BaseHealth + "/" + _combat.StartingBaseHealth + "   골드 " + _economy.Gold +
+                "   레벨 " + _economy.Level + "   배치 " + _board.Towers.Count + "/" + _economy.Level +
+                "   난수값 " + _activeSeed + phase;
+        }
+
+        /// <summary>
+        /// Creates a dynamic TextMesh Pro font from the Korean font installed on Windows.
+        /// </summary>
+        private static TMP_FontAsset CreateKoreanFontAsset()
+        {
+            TMP_FontAsset font = TMP_FontAsset.CreateFontAsset("Malgun Gothic", "Regular", 48);
+            if (font == null) font = TMP_FontAsset.CreateFontAsset("맑은 고딕", "Regular", 48);
+            return font;
+        }
+
+        /// <summary>
+        /// Converts newly simulated attacks into transient UI projectiles and impact effects.
+        /// </summary>
+        private void ProcessCombatVisualEvents()
+        {
+            if (_combat == null || _boardRect == null) return;
+            foreach (CombatVisualEvent combatEvent in _combat.VisualEvents)
+            {
+                switch (combatEvent.Type)
+                {
+                    case CombatVisualEventType.ProjectileLaunched:
+                        CreateProjectileVisual(combatEvent);
+                        break;
+                    case CombatVisualEventType.EnemyHit:
+                        if (combatEvent.IsMortar)
+                            CreateFloatingDamage(combatEvent.Position, combatEvent.Damage);
+                        else if (_projectileBySequence.TryGetValue(combatEvent.Sequence, out ProjectileVisual projectile))
+                            projectile.Damage = combatEvent.Damage;
+                        else
+                        {
+                            CreateImpactVisual(combatEvent.Position, 0f, isMortar: false);
+                            CreateFloatingDamage(combatEvent.Position, combatEvent.Damage);
+                        }
+                        break;
+                    case CombatVisualEventType.AreaImpact:
+                        CreateImpactVisual(combatEvent.Position, combatEvent.BlastRadius, isMortar: true);
+                        if (_projectileBySequence.TryGetValue(combatEvent.Sequence, out ProjectileVisual mortar))
+                            RemoveProjectileVisual(mortar);
+                        break;
+                }
+            }
+            _combat.ClearVisualEvents();
+        }
+
+        /// <summary>
+        /// Creates a colored beam and moving head from a tower anchor to the captured target.
+        /// </summary>
+        private void CreateProjectileVisual(CombatVisualEvent combatEvent)
+        {
+            var visual = new ProjectileVisual
+            {
+                Sequence = combatEvent.Sequence,
+                TargetEnemySequence = combatEvent.TargetEnemySequence,
+                Source = CellToBoardPosition(combatEvent.SourcePosition),
+                Target = CellToBoardPosition(combatEvent.Position),
+                Duration = Mathf.Max(0.04f, combatEvent.TravelTime),
+                Damage = combatEvent.Damage,
+                BlastRadius = combatEvent.BlastRadius,
+                IsMortar = combatEvent.IsMortar
+            };
+            Color color = GetProjectileColor(combatEvent.IsMortar);
+            visual.Beam = CreateRect(_boardRect, "Attack Beam", new Vector2(1f, 7f), Vector2.zero);
+            visual.BeamImage = visual.Beam.gameObject.AddComponent<UnityEngine.UI.Image>();
+            visual.BeamImage.color = color;
+            visual.BeamImage.raycastTarget = false;
+            visual.Head = CreateRect(_boardRect, "Attack Bolt", new Vector2(16f, 16f), visual.Source);
+            visual.HeadImage = visual.Head.gameObject.AddComponent<UnityEngine.UI.Image>();
+            visual.HeadImage.color = Color.white;
+            visual.HeadImage.raycastTarget = false;
+            _projectileVisuals.Add(visual);
+            _projectileBySequence[visual.Sequence] = visual;
+        }
+
+        /// <summary>
+        /// Advances projectiles and fades impact rings and floating damage text using combat time.
+        /// </summary>
+        private void UpdateCombatVisuals(float unscaledDeltaTime)
+        {
+            if (_combat == null || _boardRect == null) return;
+            float combatDelta = _combat.IsPaused ? 0f : unscaledDeltaTime * _combat.SimulationSpeed;
+            for (int i = _projectileVisuals.Count - 1; i >= 0; i--)
+            {
+                ProjectileVisual projectile = _projectileVisuals[i];
+                projectile.Elapsed += combatDelta;
+                float progress = Mathf.Clamp01(projectile.Elapsed / projectile.Duration);
+                Vector2 destination = projectile.IsMortar
+                    ? projectile.Target
+                    : GetEnemyMarkerPosition(projectile.TargetEnemySequence, projectile.Target);
+                Vector2 headPosition = Vector2.Lerp(projectile.Source, destination, progress);
+                Vector2 direction = headPosition - projectile.Source;
+                projectile.Beam.anchoredPosition = (projectile.Source + headPosition) * 0.5f;
+                projectile.Beam.sizeDelta = new Vector2(Mathf.Max(2f, direction.magnitude), projectile.IsMortar ? 10f : 7f);
+                projectile.Beam.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg);
+                projectile.BeamImage.color = new Color(projectile.BeamImage.color.r, projectile.BeamImage.color.g,
+                    projectile.BeamImage.color.b, 1f - progress * 0.3f);
+                projectile.Head.anchoredPosition = headPosition;
+                if (progress < 1f) continue;
+                if (!projectile.IsMortar)
+                {
+                    CreateImpactVisual(destination, 0f, isMortar: false);
+                    CreateFloatingDamage(destination, projectile.Damage);
+                }
+                RemoveProjectileVisual(projectile);
+            }
+
+            for (int i = _impactVisuals.Count - 1; i >= 0; i--)
+            {
+                ImpactVisual impact = _impactVisuals[i];
+                impact.Elapsed += combatDelta;
+                float progress = Mathf.Clamp01(impact.Elapsed / impact.Duration);
+                float size = Mathf.Lerp(impact.StartSize, impact.EndSize, progress);
+                impact.Rect.anchoredPosition = impact.Position;
+                impact.Rect.sizeDelta = new Vector2(size, size);
+                Color color = impact.Color;
+                color.a *= 1f - progress;
+                impact.Image.color = color;
+                if (progress < 1f) continue;
+                Destroy(impact.Rect.gameObject);
+                _impactVisuals.RemoveAt(i);
+            }
+
+            for (int i = _floatingDamageVisuals.Count - 1; i >= 0; i--)
+            {
+                FloatingDamageVisual damage = _floatingDamageVisuals[i];
+                damage.Elapsed += combatDelta;
+                float progress = Mathf.Clamp01(damage.Elapsed / damage.Duration);
+                damage.Rect.anchoredPosition = damage.StartPosition + Vector2.up * (24f * progress);
+                Color color = damage.Label.color;
+                color.a = 1f - progress;
+                damage.Label.color = color;
+                if (progress < 1f) continue;
+                Destroy(damage.Rect.gameObject);
+                _floatingDamageVisuals.RemoveAt(i);
+            }
+        }
+
+        /// <summary>
+        /// Creates a growing flash whose size reflects whether the hit is direct or explosive.
+        /// </summary>
+        private void CreateImpactVisual(Vector2 position, float blastRadius, bool isMortar)
+        {
+            float endSize = isMortar ? Mathf.Max(44f, blastRadius * CELL_SIZE * 2f) : 40f;
+            float startSize = isMortar ? Mathf.Max(18f, endSize * 0.25f) : 12f;
+            var rect = CreateRect(_boardRect, isMortar ? "Blast Flash" : "Hit Flash",
+                new Vector2(startSize, startSize), position);
+            var image = rect.gameObject.AddComponent<UnityEngine.UI.Image>();
+            Color color = isMortar ? new Color(1f, 0.40f, 0.08f, 0.76f) : new Color(1f, 0.86f, 0.35f, 0.9f);
+            image.color = color;
+            image.raycastTarget = false;
+            _impactVisuals.Add(new ImpactVisual
+            {
+                Rect = rect,
+                Image = image,
+                Position = position,
+                StartSize = startSize,
+                EndSize = endSize,
+                Duration = isMortar ? 0.28f : 0.20f,
+                Color = color
+            });
+        }
+
+        /// <summary>
+        /// Adds a Korean numeric damage popup at the point where an enemy was hit.
+        /// </summary>
+        private void CreateFloatingDamage(Vector2 position, float damage)
+        {
+            RectTransform rect = CreateRect(_boardRect, "Damage Number", new Vector2(130f, 38f), position + Vector2.up * 12f);
+            TextMeshProUGUI label = CreateText(rect, Mathf.RoundToInt(damage) + " 피해", 20);
+            label.color = new Color(1f, 0.96f, 0.70f, 1f);
+            label.fontStyle = FontStyles.Bold;
+            label.outlineWidth = 0.18f;
+            label.outlineColor = new Color(0.12f, 0.08f, 0.04f, 0.95f);
+            _floatingDamageVisuals.Add(new FloatingDamageVisual
+            {
+                Rect = rect,
+                Label = label,
+                StartPosition = rect.anchoredPosition,
+                Duration = 0.65f
+            });
+        }
+
+        /// <summary>
+        /// Returns the current enemy marker position or the launch-time target fallback.
+        /// </summary>
+        private Vector2 GetEnemyMarkerPosition(int enemySequence, Vector2 fallback)
+        {
+            if (_combat != null)
+                foreach (EnemyInstance enemy in _combat.Enemies)
+                    if (enemy.Sequence == enemySequence && enemy.IsAlive)
+                        return CellToBoardPosition(enemy.Position);
+            return fallback;
+        }
+
+        /// <summary>
+        /// Removes a projectile's beam and head and releases its sequence lookup.
+        /// </summary>
+        private void RemoveProjectileVisual(ProjectileVisual projectile)
+        {
+            if (projectile == null) return;
+            Destroy(projectile.Beam.gameObject);
+            Destroy(projectile.Head.gameObject);
+            _projectileBySequence.Remove(projectile.Sequence);
+            _projectileVisuals.Remove(projectile);
+        }
+
+        /// <summary>
+        /// Selects a contrasting attack color for direct shots and mortar shells.
+        /// </summary>
+        private static Color GetProjectileColor(bool isMortar)
+        {
+            return isMortar ? new Color(1f, 0.48f, 0.12f) : new Color(0.36f, 0.86f, 1f);
+        }
+
+        /// <summary>
+        /// Clears active attack visuals before a run is replaced.
+        /// </summary>
+        private void ClearCombatVisuals()
+        {
+            foreach (ProjectileVisual projectile in _projectileVisuals)
+            {
+                if (projectile.Beam != null) Destroy(projectile.Beam.gameObject);
+                if (projectile.Head != null) Destroy(projectile.Head.gameObject);
+            }
+            foreach (ImpactVisual impact in _impactVisuals)
+                if (impact.Rect != null) Destroy(impact.Rect.gameObject);
+            foreach (FloatingDamageVisual damage in _floatingDamageVisuals)
+                if (damage.Rect != null) Destroy(damage.Rect.gameObject);
+            _projectileVisuals.Clear();
+            _projectileBySequence.Clear();
+            _impactVisuals.Clear();
+            _floatingDamageVisuals.Clear();
         }
 
         /// <summary>
@@ -587,7 +887,7 @@ namespace BackpackDefense
             var image = rect.gameObject.AddComponent<UnityEngine.UI.Image>();
             image.color = new Color(1f, 0.48f, 0.1f, 0.75f);
             image.raycastTarget = false;
-            CreateText(rect, "M", 14);
+            CreateText(rect, "탄", 14);
             return rect;
         }
 
@@ -620,10 +920,10 @@ namespace BackpackDefense
         {
             switch (kind)
             {
-                case EnemyKind.Fast: return "F";
-                case EnemyKind.Tank: return "T";
-                case EnemyKind.Boss: return "B";
-                default: return "N";
+                case EnemyKind.Fast: return "빠";
+                case EnemyKind.Tank: return "탱";
+                case EnemyKind.Boss: return "보";
+                default: return "일";
             }
         }
 
@@ -691,13 +991,13 @@ namespace BackpackDefense
             _material = _economy.CanFeed(_selectedUnit, unit) ? unit : null;
             List<Vector2Int> proposedPath = _material?.Placement == null ? null : _board.GetPathWithout(_material.Placement);
             Refresh(proposedPath, _material != null, null);
-            if (_material == null) _status.text = "Choose a matching untouched 1-star tower";
+            if (_material == null) _status.text = "같은 종류의 강화하지 않은 1성 타워를 고르세요.";
             else
             {
                 int oldLength = _board.GetPath().Count - 1;
                 int newLength = _material.Placement == null ? oldLength : _board.GetPathWithout(_material.Placement).Count - 1;
-                _status.text = "Confirm feed: multiplier " + _selectedUnit.DamageMultiplier.ToString("0.0") + " -> " +
-                    _selectedUnit.NextDamageMultiplier.ToString("0.0") + " | Path " + oldLength + " -> " + newLength;
+                _status.text = "재료 투입 확인: 공격력 배율 " + _selectedUnit.DamageMultiplier.ToString("0.0") + " → " +
+                    _selectedUnit.NextDamageMultiplier.ToString("0.0") + " | 경로 " + oldLength + " → " + newLength + "칸";
             }
         }
 
@@ -711,7 +1011,7 @@ namespace BackpackDefense
             _material = null;
             _isFeeding = false;
             Refresh(null, false, null);
-            if (!success) _status.text = "Feed unavailable: select an eligible material";
+            if (!success) _status.text = "재료를 투입할 수 없습니다. 조건에 맞는 타워를 선택하세요.";
         }
 
         /// <summary>
@@ -734,7 +1034,7 @@ namespace BackpackDefense
             {
                 _isSaleArmed = true;
                 Refresh(null, false, null);
-                _status.text = "Click SELL again to confirm refund of " + _selectedUnit.InvestedGold;
+                _status.text = "환급 골드 " + _selectedUnit.InvestedGold + "을 받으려면 판매를 한 번 더 누르세요.";
                 return;
             }
             _economy.Sell(_selectedUnit);
@@ -743,7 +1043,7 @@ namespace BackpackDefense
         }
 
         /// <summary>
-        /// Formats the tower footprint with A marking the attack anchor.
+        /// Formats the tower footprint with a Korean marker for its attack anchor.
         /// </summary>
         private static string FormatShape(TowerShape shape, int rotation)
         {
@@ -763,7 +1063,7 @@ namespace BackpackDefense
                 for (int x = minX; x <= maxX; x++)
                 {
                     var cell = new Vector2Int(x, y);
-                    result += cell == Vector2Int.zero ? "A" : cells.Contains(cell) ? "#" : ".";
+                    result += cell == Vector2Int.zero ? "포" : cells.Contains(cell) ? "■" : "·";
                 }
             }
             return result;
@@ -871,7 +1171,7 @@ namespace BackpackDefense
                 if (unit == _selectedUnit) towerColor = Color.Lerp(towerColor, Color.white, 0.22f);
                 foreach (Vector2Int point in tower.Shape.GetCells(tower.Position, tower.Rotation))
                     _cells[point.x, point.y].color = towerColor;
-                _anchorLabels[tower.Position.x, tower.Position.y].text = isEligible ? "A+" : "A";
+                _anchorLabels[tower.Position.x, tower.Position.y].text = isEligible ? "+포" : "포";
             }
             if (previewCells != null)
                 foreach (Vector2Int point in previewCells)
@@ -884,19 +1184,19 @@ namespace BackpackDefense
                 for (int i = 0; i < _shopLabels.Length; i++)
                 {
                     int offer = _economy.Offers[i];
-                    _shopLabels[i].text = offer < 0 ? "SOLD" : _shapes[offer].Name + "  (" + _economy.GetPrice(offer) + ") x" + CountOwned(offer) +
+                    _shopLabels[i].text = offer < 0 ? "품절" : _shapes[offer].Name + "  (" + _economy.GetPrice(offer) + "골드) 보유 " + CountOwned(offer) +
                         "\n" + FormatShape(_shapes[offer], _shopRotations[i]);
                 }
                 for (int i = 0; i < _benchLabels.Length; i++)
                 {
                     TowerUnit unit = GetBenchUnit(i);
                     bool isEligible = _isFeeding && _economy.CanFeed(_selectedUnit, unit);
-                    _benchLabels[i].text = unit == null ? "EMPTY" : (isEligible ? "+ " : "") + _shapes[unit.TypeIndex].Name + "\n" + unit.Star + "*";
+                    _benchLabels[i].text = unit == null ? "비어 있음" : (isEligible ? "+ " : "") + _shapes[unit.TypeIndex].Name + "\n" + unit.Star + "성";
                     _benchLabels[i].color = _isFeeding && !isEligible ? Color.gray : Color.white;
                 }
-                _economyStatus.text = "Gold: " + _economy.Gold + "   Level: " + _economy.Level + "   Deployed: " + _board.Towers.Count + "/" + _economy.Level +
-                    "   Level cost: " + (_economy.LevelCost == 0 ? "MAX" : _economy.LevelCost.ToString()) + "   Shop: " + (_economy.IsLocked ? "LOCKED" : "OPEN");
-                _status.text = _isFeeding ? "Choose material, then CONFIRM FEED. Esc: cancel." : "Drag a bench tower to the board. R: rotate. Right-click: select.";
+                _economyStatus.text = "골드: " + _economy.Gold + "   레벨: " + _economy.Level + "   배치: " + _board.Towers.Count + "/" + _economy.Level +
+                    "   다음 레벨 비용: " + (_economy.LevelCost == 0 ? "최대" : _economy.LevelCost.ToString()) + "   상점: " + (_economy.IsLocked ? "고정" : "교체 가능");
+                _status.text = _isFeeding ? "재료를 고른 뒤 재료 투입을 누르세요. 에스케이프 키로 취소합니다." : "대기석 타워를 보드로 끌어 놓으세요. R 키: 회전. 마우스 오른쪽 버튼: 선택.";
             }
 
             _synergyStatus.text = BuildSynergySummary(committedEvaluation, shownEvaluation, isSynergyPreview);
@@ -917,17 +1217,17 @@ namespace BackpackDefense
         private static string BuildWaveReportStatus(WaveReport report)
         {
             var text = new StringBuilder();
-            text.Append("WAVE ").Append(report.WaveNumber).Append(" REPORT").AppendLine();
-            text.Append("Path ").Append(report.PathLength).Append(" | Kills ").Append(report.Kills)
-                .Append(" | Leaks ").Append(report.Leaks).AppendLine();
-            text.Append("Base damage ").Append(report.BaseDamage).Append(" | HP ")
-                .Append(report.RemainingBaseHealth).Append(" | Income ").Append(report.GoldReward).AppendLine();
-            text.Append("Synergy: ").Append(report.SynergySummary).AppendLine();
-            text.AppendLine("Tower | Attacks | Damage");
+            text.Append(report.WaveNumber).Append(" 웨이브 결과").AppendLine();
+            text.Append("경로 ").Append(report.PathLength).Append("칸 | 처치 ").Append(report.Kills)
+                .Append(" | 누수 ").Append(report.Leaks).AppendLine();
+            text.Append("기지 피해 ").Append(report.BaseDamage).Append(" | 남은 체력 ")
+                .Append(report.RemainingBaseHealth).Append(" | 보상 골드 ").Append(report.GoldReward).AppendLine();
+            text.Append("시너지: ").Append(report.SynergySummary).AppendLine();
+            text.AppendLine("타워 | 공격 횟수 | 피해량");
             foreach (TowerDamageReport tower in report.Towers)
                 text.Append(tower.TowerName).Append(" | ").Append(tower.AttackCount).Append(" | ")
                     .AppendLine(tower.DamageDealt.ToString("0.0"));
-            if (report.Towers.Count == 0) text.Append("No towers deployed");
+            if (report.Towers.Count == 0) text.Append("배치된 타워가 없습니다.");
             return text.ToString();
         }
 
@@ -937,8 +1237,8 @@ namespace BackpackDefense
         private string BuildSynergySummary(BoardSynergyEvaluation committed, BoardSynergyEvaluation shown, bool isPreview)
         {
             var text = new StringBuilder();
-            text.AppendLine(isPreview ? "SYNERGY PREVIEW" : "BOARD SYNERGY");
-            text.Append("Race types | ");
+            text.AppendLine(isPreview ? "시너지 미리보기" : "보드 시너지");
+            text.Append("종족별 종류 | ");
             for (int i = 0; i < 3; i++)
             {
                 TowerRace race = (TowerRace)i;
@@ -947,10 +1247,10 @@ namespace BackpackDefense
                 float bonus = shown.GetRaceGlobalAttackBonus(race);
                 text.Append(SynergyEvaluator.GetRaceName(race)).Append(' ').Append(count).Append('/')
                     .Append(_synergySettings.ThirdTierTypeCount);
-                if (bonus > 0f) text.Append(" (+").Append(Mathf.RoundToInt(bonus * 100f)).Append("% ATK)");
+                if (bonus > 0f) text.Append(" (공격력 +").Append(Mathf.RoundToInt(bonus * 100f)).Append("%)");
             }
             text.AppendLine();
-            text.Append("Role types | ");
+            text.Append("직업별 종류 | ");
             for (int i = 0; i < 3; i++)
             {
                 TowerRole role = (TowerRole)i;
@@ -959,13 +1259,13 @@ namespace BackpackDefense
                 float bonus = shown.GetRoleGlobalAttackSpeedBonus(role);
                 text.Append(SynergyEvaluator.GetRoleName(role)).Append(' ').Append(count).Append('/')
                     .Append(_synergySettings.ThirdTierTypeCount);
-                if (bonus > 0f) text.Append(" (+").Append(Mathf.RoundToInt(bonus * 100f)).Append("% AS)");
+                if (bonus > 0f) text.Append(" (공격 속도 +").Append(Mathf.RoundToInt(bonus * 100f)).Append("%)");
             }
 
             if (isPreview)
             {
                 text.AppendLine();
-                text.AppendLine("Changed towers:");
+                text.AppendLine("변경된 타워:");
                 bool hasChanges = false;
                 foreach (TowerSynergyStats stats in shown.Towers)
                 {
@@ -976,7 +1276,7 @@ namespace BackpackDefense
                     text.Append(stats.Definition.Name).Append(": ").Append(change);
                     hasChanges = true;
                 }
-                if (!hasChanges) text.AppendLine().Append("No deployed stats change.");
+                if (!hasChanges) text.AppendLine().Append("배치 타워 능력치 변화 없음");
             }
 
             return text.ToString();
@@ -987,7 +1287,7 @@ namespace BackpackDefense
         /// </summary>
         private string BuildSelectedStatus(BoardSynergyEvaluation committed, BoardSynergyEvaluation shown, bool isPreview)
         {
-            if (_selectedUnit == null) return "Select a tower";
+            if (_selectedUnit == null) return "타워를 선택하세요.";
 
             TowerShape shape = _shapes[_selectedUnit.TypeIndex];
             TowerSynergyStats stats = shown.GetStats(_selectedUnit);
@@ -995,46 +1295,46 @@ namespace BackpackDefense
             int feedCount = _selectedUnit.FeedCount;
             bool isFeedPreview = _isFeeding && _material != null;
             if (isFeedPreview && _selectedUnit.FeedCount < 5) feedCount++;
-            string progress = feedCount < 2 ? feedCount + "/2" : feedCount < 5 ? (feedCount - 2) + "/3" : "MAX";
+            string progress = feedCount < 2 ? feedCount + "/2" : feedCount < 5 ? (feedCount - 2) + "/3" : "최대";
             int displayedStar = feedCount < 2 ? 1 : feedCount < 5 ? 2 : 3;
             var text = new StringBuilder();
             text.Append(shape.Name).Append(" | ").Append(SynergyEvaluator.GetRaceName(shape.Race)).Append(" / ")
                 .Append(SynergyEvaluator.GetRoleName(shape.Role));
-            if (isPreview) text.Append(" | PREVIEW");
+            if (isPreview) text.Append(" | 미리보기");
             text.AppendLine();
-            text.Append(isFeedPreview ? "Star " + _selectedUnit.Star + " -> " + displayedStar : "Star " + _selectedUnit.Star)
-                .Append(" | Feed ").Append(progress)
-                .Append(" | Refund ").Append(_selectedUnit.InvestedGold);
+            text.Append(isFeedPreview ? "성급 " + _selectedUnit.Star + " → " + displayedStar : "성급 " + _selectedUnit.Star)
+                .Append(" | 강화 진행 ").Append(progress)
+                .Append(" | 누적 비용 ").Append(_selectedUnit.InvestedGold).Append("골드");
 
             if (stats == null)
             {
                 text.AppendLine();
-                text.Append("Not deployed | Base attack ").Append(shape.BaseAttack.ToString("0.0"))
-                    .Append(" | Damage multiplier x").Append(_selectedUnit.DamageMultiplierAt(feedCount).ToString("0.00"));
+                text.Append("미배치 | 기본 공격력 ").Append(shape.BaseAttack.ToString("0.0"))
+                    .Append(" | 공격력 배율 x").Append(_selectedUnit.DamageMultiplierAt(feedCount).ToString("0.00"));
                 return text.ToString();
             }
 
             text.AppendLine();
-            text.Append("Attack ").Append(stats.Attack.ToString("0.0"))
-                .Append(" | Attack speed x").Append(stats.AttackSpeedMultiplier.ToString("0.00"));
+            text.Append("공격력 ").Append(stats.Attack.ToString("0.0"))
+                .Append(" | 공격 속도 배율 x").Append(stats.AttackSpeedMultiplier.ToString("0.00"));
             text.AppendLine();
-            text.Append("Interval ").Append(stats.AttackInterval.ToString("0.00")).Append("s | Range ")
+            text.Append("공격 간격 ").Append(stats.AttackInterval.ToString("0.00")).Append("초 | 사거리 ")
                 .Append(stats.Range.ToString("0.00"));
-            if (shape.Role == TowerRole.Mortar) text.Append(" | Blast ").Append(stats.BlastRadius.ToString("0.00"));
+            if (shape.Role == TowerRole.Mortar) text.Append(" | 폭발 범위 ").Append(stats.BlastRadius.ToString("0.00"));
             text.AppendLine();
-            text.Append("Neighbors ").Append(stats.AdjacentTowerCount).Append(" | Same-race ")
-                .Append(stats.SameRaceNeighborCount).Append(" | Cluster ").Append(stats.RaceClusterSize);
+            text.Append("인접 타워 ").Append(stats.AdjacentTowerCount).Append(" | 같은 종족 인접 ")
+                .Append(stats.SameRaceNeighborCount).Append(" | 종족 군집 ").Append(stats.RaceClusterSize);
             text.AppendLine();
-            text.Append("Path C ").Append(stats.PathContactCells).Append(" | Gap D ").Append(stats.PathGap);
+            text.Append("경로 접촉 칸 ").Append(stats.PathContactCells).Append(" | 경로 이격 ").Append(stats.PathGap);
 
             if (isPreview && previous != null)
             {
                 string change = BuildStatDelta(previous, stats);
-                if (change.Length > 0) text.AppendLine().Append("Change: ").Append(change);
+                if (change.Length > 0) text.AppendLine().Append("변화: ").Append(change);
             }
 
             text.AppendLine();
-            text.AppendLine("Sources:");
+            text.AppendLine("능력치 출처:");
             foreach (string source in stats.Sources)
                 text.Append("• ").AppendLine(source);
             return text.ToString();
@@ -1046,19 +1346,19 @@ namespace BackpackDefense
         private static string BuildStatDelta(TowerSynergyStats previous, TowerSynergyStats current)
         {
             if (previous == null)
-                return "new | ATK " + current.Attack.ToString("0.0") + " | AS x" +
-                    current.AttackSpeedMultiplier.ToString("0.00") + " | Range " + current.Range.ToString("0.00");
+                return "신규 | 공격력 " + current.Attack.ToString("0.0") + " | 공격 속도 x" +
+                    current.AttackSpeedMultiplier.ToString("0.00") + " | 사거리 " + current.Range.ToString("0.00");
 
             var changes = new StringBuilder();
-            AppendStatDelta(changes, "ATK", previous.Attack, current.Attack);
-            AppendStatDelta(changes, "AS", previous.AttackSpeedMultiplier, current.AttackSpeedMultiplier);
-            AppendStatDelta(changes, "Interval", previous.AttackInterval, current.AttackInterval);
-            AppendStatDelta(changes, "Range", previous.Range, current.Range);
-            AppendStatDelta(changes, "Blast", previous.BlastRadius, current.BlastRadius);
-            AppendIntegerDelta(changes, "Links", previous.AdjacentTowerCount, current.AdjacentTowerCount);
-            AppendIntegerDelta(changes, "Cluster", previous.RaceClusterSize, current.RaceClusterSize);
-            AppendIntegerDelta(changes, "C", previous.PathContactCells, current.PathContactCells);
-            AppendIntegerDelta(changes, "D", previous.PathGap, current.PathGap);
+            AppendStatDelta(changes, "공격력", previous.Attack, current.Attack);
+            AppendStatDelta(changes, "공격 속도", previous.AttackSpeedMultiplier, current.AttackSpeedMultiplier);
+            AppendStatDelta(changes, "공격 간격", previous.AttackInterval, current.AttackInterval);
+            AppendStatDelta(changes, "사거리", previous.Range, current.Range);
+            AppendStatDelta(changes, "폭발 범위", previous.BlastRadius, current.BlastRadius);
+            AppendIntegerDelta(changes, "인접 타워", previous.AdjacentTowerCount, current.AdjacentTowerCount);
+            AppendIntegerDelta(changes, "종족 군집", previous.RaceClusterSize, current.RaceClusterSize);
+            AppendIntegerDelta(changes, "경로 접촉 칸", previous.PathContactCells, current.PathContactCells);
+            AppendIntegerDelta(changes, "경로 이격", previous.PathGap, current.PathGap);
             return changes.ToString();
         }
 
@@ -1069,7 +1369,7 @@ namespace BackpackDefense
         {
             if (Mathf.Abs(previous - current) < 0.001f) return;
             if (changes.Length > 0) changes.Append(" | ");
-            changes.Append(label).Append(' ').Append(previous.ToString("0.0")).Append("->")
+            changes.Append(label).Append(' ').Append(previous.ToString("0.0")).Append(" → ")
                 .Append(current.ToString("0.0"));
         }
 

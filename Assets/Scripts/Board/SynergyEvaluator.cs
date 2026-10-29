@@ -284,10 +284,10 @@ namespace BackpackDefense
         {
             switch (race)
             {
-                case TowerRace.Stone: return "Stone";
-                case TowerRace.Fungal: return "Fungal";
-                case TowerRace.Resonant: return "Resonant";
-                default: return "Unknown";
+                case TowerRace.Stone: return "석재";
+                case TowerRace.Fungal: return "균사";
+                case TowerRace.Resonant: return "공명";
+                default: return "알 수 없음";
             }
         }
 
@@ -298,10 +298,10 @@ namespace BackpackDefense
         {
             switch (role)
             {
-                case TowerRole.Mortar: return "Mortar";
-                case TowerRole.Sniper: return "Sniper";
-                case TowerRole.Tuner: return "Tuner";
-                default: return "Unknown";
+                case TowerRole.Mortar: return "박격포";
+                case TowerRole.Sniper: return "저격포";
+                case TowerRole.Tuner: return "조율기";
+                default: return "알 수 없음";
             }
         }
 
@@ -457,21 +457,21 @@ namespace BackpackDefense
 
             var sources = new List<string>();
             if (entry.FeedCount > 0)
-                sources.Add("Material feeds: x" + entry.Unit.DamageMultiplierAt(entry.FeedCount).ToString("0.00") + " attack");
+                sources.Add("재료 강화: 공격력 x" + entry.Unit.DamageMultiplierAt(entry.FeedCount).ToString("0.00"));
             if (raceGlobalAttackBonus > 0f)
-                sources.Add(GetRaceName(entry.Definition.Race) + " global (" + raceTypeCount + " types): +" +
-                    FormatPercent(raceGlobalAttackBonus) + " attack");
+                sources.Add(GetRaceName(entry.Definition.Race) + " 전역 시너지 (" + raceTypeCount + "종): 공격력 +" +
+                    FormatPercent(raceGlobalAttackBonus));
             if (roleGlobalAttackSpeedBonus > 0f)
-                sources.Add(GetRoleName(entry.Definition.Role) + " global (" + roleTypeCount + " types): +" +
-                    FormatPercent(roleGlobalAttackSpeedBonus) + " attack speed");
+                sources.Add(GetRoleName(entry.Definition.Role) + " 전역 시너지 (" + roleTypeCount + "종): 공격 속도 +" +
+                    FormatPercent(roleGlobalAttackSpeedBonus));
 
             if (entry.Definition.Race == TowerRace.Stone)
             {
                 int effectiveNeighbors = Mathf.Min(sameRaceNeighbors, settings.StoneNeighborCap);
                 racePlacementAttackBonus = effectiveNeighbors * settings.StoneAttackPerNeighbor;
                 if (racePlacementAttackBonus > 0f)
-                    sources.Add("Stone adjacency (" + JoinNames(sameRaceNames) + "): +" +
-                        FormatPercent(racePlacementAttackBonus) + " attack");
+                    sources.Add("석재 인접 시너지 (" + JoinNames(sameRaceNames) + "): 공격력 +" +
+                        FormatPercent(racePlacementAttackBonus));
             }
             else if (entry.Definition.Race == TowerRace.Fungal)
             {
@@ -480,23 +480,23 @@ namespace BackpackDefense
                 else if (entry.ClusterSize >= settings.FungalFirstClusterSize)
                     racePlacementAttackSpeedBonus = settings.FungalFirstAttackSpeedBonus;
                 if (racePlacementAttackSpeedBonus > 0f)
-                    sources.Add("Fungal cluster (" + entry.ClusterSize + " towers): +" +
-                        FormatPercent(racePlacementAttackSpeedBonus) + " attack speed");
+                    sources.Add("균사 군집 (" + entry.ClusterSize + "기): 공격 속도 +" +
+                        FormatPercent(racePlacementAttackSpeedBonus));
             }
             else if (entry.Definition.Race == TowerRace.Resonant)
             {
                 racePlacementRangeBonus = Mathf.Min(resonantNeighborTypes * settings.ResonantRangePerNeighborType,
                     settings.ResonantRangeCap);
                 if (racePlacementRangeBonus > 0f)
-                    sources.Add("Resonant adjacent race types (" + resonantNeighborTypes + "): +" +
-                        racePlacementRangeBonus.ToString("0.00") + " range");
+                    sources.Add("공명 인접 종족 수 (" + resonantNeighborTypes + "종): 사거리 +" +
+                        racePlacementRangeBonus.ToString("0.00"));
             }
 
             if (entry.Definition.Role == TowerRole.Mortar)
             {
                 float blastRadiusBonus = Mathf.Min(pathContactCells * settings.MortarBlastRadiusPerPathContact,
                     settings.MortarBlastRadiusCap);
-                sources.Add("Path contact C=" + pathContactCells + ": blast radius " +
+                sources.Add("경로 접촉 " + pathContactCells + "칸: 폭발 범위 " +
                     (settings.MortarBaseBlastRadius + blastRadiusBonus).ToString("0.00"));
             }
             else if (entry.Definition.Role == TowerRole.Sniper)
@@ -504,19 +504,18 @@ namespace BackpackDefense
                 jobPlacementAttackBonus = Mathf.Min(pathGap * settings.SniperAttackPerGap, settings.SniperAttackCap);
                 jobPlacementRangeBonus = Mathf.Min(pathGap * settings.SniperRangePerGap, settings.SniperRangeCap);
                 if (jobPlacementAttackBonus > 0f || jobPlacementRangeBonus > 0f)
-                    sources.Add("Sniper path gap D=" + pathGap + ": +" + FormatPercent(jobPlacementAttackBonus) +
-                        " attack, +" + jobPlacementRangeBonus.ToString("0.00") + " range");
+                    sources.Add("저격 경로 이격 " + pathGap + "칸: 공격력 +" + FormatPercent(jobPlacementAttackBonus) +
+                        ", 사거리 +" + jobPlacementRangeBonus.ToString("0.00"));
             }
             else if (entry.Definition.Role == TowerRole.Tuner)
             {
-                sources.Add("Tuner aura: +" + FormatPercent(settings.TunerAuraAttackSpeedBonus) +
-                    " attack speed to adjacent allies");
+                sources.Add("조율 오라: 인접 아군 공격 속도 +" + FormatPercent(settings.TunerAuraAttackSpeedBonus));
             }
 
             if (tunerAuraBonus > 0f)
-                sources.Add("Tuner aura from (" + JoinNames(tunerNames) + "): +" +
-                    FormatPercent(tunerAuraBonus) + " attack speed; duplicate auras do not stack");
-            if (sources.Count == 0) sources.Add("No active bonuses");
+                sources.Add("조율 오라 (" + JoinNames(tunerNames) + "): 공격 속도 +" +
+                    FormatPercent(tunerAuraBonus) + "; 중복 효과 미적용");
+            if (sources.Count == 0) sources.Add("활성 보너스 없음");
 
             float raceAttackBonus = raceGlobalAttackBonus + racePlacementAttackBonus;
             float totalAttackBonus = raceAttackBonus + jobPlacementAttackBonus;

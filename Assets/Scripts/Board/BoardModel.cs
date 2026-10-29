@@ -136,13 +136,13 @@ namespace BackpackDefense
             if (shape == null)
             {
                 path = null;
-                reason = "Unknown tower shape";
+                reason = "알 수 없는 타워 형태입니다.";
                 return false;
             }
             if (moving != null && !_towers.Contains(moving))
             {
                 path = null;
-                reason = "Tower is not on this board";
+                reason = "이 타워는 현재 보드에 없습니다.";
                 return false;
             }
             bool[,] blocked = new bool[WIDTH, HEIGHT];
@@ -158,20 +158,20 @@ namespace BackpackDefense
                 if (!IsInside(cell))
                 {
                     path = null;
-                    reason = "Outside the board";
+                    reason = "보드 바깥에는 배치할 수 없습니다.";
                     return false;
                 }
                 if (cell == Spawn || cell == Goal || blocked[cell.x, cell.y])
                 {
                     path = null;
-                    reason = "Occupied or reserved";
+                    reason = "이미 차지했거나 예약된 칸입니다.";
                     return false;
                 }
                 blocked[cell.x, cell.y] = true;
             }
 
             path = FindPath(blocked);
-            reason = path == null ? "Path blocked" : null;
+            reason = path == null ? "적의 경로를 막을 수 없습니다." : null;
             return path != null;
         }
 
