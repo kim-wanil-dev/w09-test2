@@ -124,6 +124,7 @@ namespace BackpackDefense
 
         public Vector2Int Spawn { get; } = new Vector2Int(0, 3);
         public Vector2Int Goal { get; } = new Vector2Int(9, 3);
+        public int Version { get; private set; }
         public IReadOnlyList<PlacedTower> Towers => _towers;
 
         /// <summary>
@@ -132,6 +133,18 @@ namespace BackpackDefense
         public bool TryPreview(TowerShape shape, Vector2Int position, int rotation,
             PlacedTower moving, out List<Vector2Int> path, out string reason)
         {
+            if (shape == null)
+            {
+                path = null;
+                reason = "Unknown tower shape";
+                return false;
+            }
+            if (moving != null && !_towers.Contains(moving))
+            {
+                path = null;
+                reason = "Tower is not on this board";
+                return false;
+            }
             bool[,] blocked = new bool[WIDTH, HEIGHT];
             foreach (PlacedTower tower in _towers)
             {
@@ -173,13 +186,19 @@ namespace BackpackDefense
             if (moving != null) _towers.Remove(moving);
             result = new PlacedTower(shape, position, rotation);
             _towers.Add(result);
+            Version++;
             return true;
         }
 
         /// <summary>
-        /// Removes a placed tower and returns whether it belonged to this board.
+        /// Removes a placed tower and increments the board version only when it belonged to this board.
         /// </summary>
-        public bool Remove(PlacedTower tower) => _towers.Remove(tower);
+        public bool Remove(PlacedTower tower)
+        {
+            bool removed = _towers.Remove(tower);
+            if (removed) Version++;
+            return removed;
+        }
 
         /// <summary>
         /// Returns the shortest path for the current tower configuration.

@@ -39,6 +39,10 @@ namespace BackpackDefense
         private readonly List<UnityEngine.UI.Button> _economyButtons = new List<UnityEngine.UI.Button>();
         private readonly Dictionary<int, EnemyMarker> _enemyMarkers = new Dictionary<int, EnemyMarker>();
         private readonly Dictionary<int, RectTransform> _impactMarkers = new Dictionary<int, RectTransform>();
+        private readonly HashSet<int> _activeEnemyIds = new HashSet<int>();
+        private readonly List<int> _removedEnemyIds = new List<int>();
+        private readonly HashSet<int> _activeImpactIds = new HashSet<int>();
+        private readonly List<int> _removedImpactIds = new List<int>();
         private IReadOnlyList<TowerShape> _shapes;
         private EconomyModel _economy;
         private CombatModel _combat;
@@ -56,6 +60,16 @@ namespace BackpackDefense
         private bool _isSaleArmed;
         private PlacedTower _moving;
         private Vector2Int _grabOffset;
+        private Vector2Int _previewAnchor;
+        private int _previewRotation;
+        private int _previewBoardVersion;
+        private TowerUnit _previewUnit;
+        private PlacedTower _previewMoving;
+        private bool _hasPreviewCache;
+        private bool _previewValid;
+        private string _previewReason;
+        private List<Vector2Int> _previewPath;
+        private List<Vector2Int> _previewCells;
         private int _activeSeed;
         private CombatPhase _displayedPhase;
         private bool _hasDisplayedPhase;
@@ -138,16 +152,19 @@ namespace BackpackDefense
                 }
                 else _grabOffset = Vector2Int.zero;
                 _isDragging = _selectedUnit != null && (_moving != null || _selectedUnit.Placement == null);
+                _hasPreviewCache = false;
             }
             if (_isDragging && Keyboard.current.rKey.wasPressedThisFrame)
             {
                 _rotation = (_rotation + 1) % 4;
                 _grabOffset = new Vector2Int(-_grabOffset.y, _grabOffset.x);
+                _hasPreviewCache = false;
             }
             if (_isDragging && (Keyboard.current.escapeKey.wasPressedThisFrame || Mouse.current.rightButton.wasPressedThisFrame))
             {
                 _isDragging = false;
                 _moving = null;
+                _hasPreviewCache = false;
                 Refresh(null, false, null);
                 return;
             }
@@ -155,24 +172,50 @@ namespace BackpackDefense
             {
                 Vector2Int anchor = cell - _grabOffset;
                 TowerShape shape = _shapes[_selectedUnit.TypeIndex];
-                bool valid = _board.TryPreview(shape, anchor, _rotation, _moving, out List<Vector2Int> path, out string reason);
-                if (_moving == null && _board.Towers.Count >= _economy.Level)
+                bool cacheMatches = _hasPreviewCache && _previewAnchor == anchor &&
+                    _previewRotation == _rotation && _previewBoardVersion == _board.Version &&
+                    _previewUnit == _selectedUnit && _previewMoving == _moving;
+                if (!cacheMatches)
                 {
-                    valid = false;
-                    reason = "Deployment limit reached";
+                    _previewValid = _board.TryPreview(shape, anchor, _rotation, _moving,
+                        out _previewPath, out _previewReason);
+                    if (_moving == null && _board.Towers.Count >= _economy.Level)
+                    {
+                        _previewValid = false;
+                        _previewReason = "Deployment limit reached";
+                    }
+                    _previewAnchor = anchor;
+                    _previewRotation = _rotation;
+                    _previewBoardVersion = _board.Version;
+                    _previewUnit = _selectedUnit;
+                    _previewMoving = _moving;
+                    _previewCells = shape.GetCells(anchor, _rotation);
+                    _hasPreviewCache = true;
+                    PlacedTower previewPlacement = _previewValid ? new PlacedTower(shape, anchor, _rotation) : null;
+                    Refresh(_previewPath, _previewValid, _previewCells, previewPlacement);
+                    if (anchor.x >= 0 && anchor.x < BoardModel.WIDTH && anchor.y >= 0 && anchor.y < BoardModel.HEIGHT)
+                        _anchorLabels[anchor.x, anchor.y].text = "A";
+                    _status.text = _previewValid
+                        ? "Drag to place / R: rotate / Esc: cancel  |  Path: " + (_previewPath.Count - 1)
+                        : _previewReason;
                 }
-                PlacedTower previewPlacement = valid ? new PlacedTower(shape, anchor, _rotation) : null;
-                Refresh(path, valid, shape.GetCells(anchor, _rotation), previewPlacement);
-                if (anchor.x >= 0 && anchor.x < BoardModel.WIDTH && anchor.y >= 0 && anchor.y < BoardModel.HEIGHT)
-                    _anchorLabels[anchor.x, anchor.y].text = "A";
-                _status.text = valid ? "Drag to place / R: rotate / Esc: cancel  |  Path: " + (path.Count - 1) : reason;
+            }
+            else if (_isDragging && !onBoard && _hasPreviewCache)
+            {
+                _hasPreviewCache = false;
+                Refresh(null, false, null);
+                _status.text = "Outside the board";
             }
             if (_isDragging && Mouse.current.leftButton.wasReleasedThisFrame)
             {
-                if (onBoard) _economy.Place(_selectedUnit, cell - _grabOffset, _rotation);
+                bool placed = onBoard && _economy.Place(_selectedUnit, cell - _grabOffset, _rotation);
+                string failure = _previewReason;
                 _isDragging = false;
                 _moving = null;
+                _hasPreviewCache = false;
                 Refresh(null, false, null);
+                if (!placed) _status.text = string.IsNullOrEmpty(failure)
+                    ? "Placement rejected; the previous board state was restored" : failure;
             }
             if (!_isDragging && onBoard && Mouse.current.rightButton.wasPressedThisFrame)
             {
@@ -304,6 +347,7 @@ namespace BackpackDefense
             _moving = null;
             _rotation = 0;
             _isDragging = false;
+            _hasPreviewCache = false;
             _isFeeding = false;
             _isSaleArmed = false;
             System.Array.Clear(_shopRotations, 0, _shopRotations.Length);
@@ -327,6 +371,7 @@ namespace BackpackDefense
                 }
                 _isDragging = false;
                 _moving = null;
+                _hasPreviewCache = false;
                 CancelFeed();
                 _economy.BeginCombat();
             }
@@ -451,8 +496,8 @@ namespace BackpackDefense
         private void UpdateCombatHud()
         {
             if (_combat == null || _economyStatus == null) return;
-            int minutes = Mathf.FloorToInt(_combat.SimulationTime / 60f);
-            int seconds = Mathf.FloorToInt(_combat.SimulationTime % 60f);
+            int minutes = Mathf.FloorToInt((float)(_combat.SimulationTime / 60d));
+            int seconds = Mathf.FloorToInt((float)(_combat.SimulationTime % 60d));
             string time = minutes.ToString("00") + ":" + seconds.ToString("00");
             string phase = _combat.Phase == CombatPhase.Combat ? " | " + time + " | " +
                 (_combat.IsPaused ? "PAUSED" : (_combat.SimulationSpeed > 1.5f ? "2X" : "1X")) : "";
@@ -468,10 +513,10 @@ namespace BackpackDefense
         private void RenderCombatEntities()
         {
             if (_combat == null) return;
-            var activeEnemies = new HashSet<int>();
+            _activeEnemyIds.Clear();
             foreach (EnemyInstance enemy in _combat.Enemies)
             {
-                activeEnemies.Add(enemy.Sequence);
+                _activeEnemyIds.Add(enemy.Sequence);
                 if (!_enemyMarkers.TryGetValue(enemy.Sequence, out EnemyMarker marker))
                 {
                     marker = CreateEnemyMarker();
@@ -482,27 +527,27 @@ namespace BackpackDefense
                 marker.Label.text = GetEnemyLabel(enemy.Kind);
                 marker.HealthFill.sizeDelta = new Vector2(30f * Mathf.Clamp01(enemy.Health / enemy.MaxHealth), 4f);
             }
-            var removedEnemies = new List<int>();
+            _removedEnemyIds.Clear();
             foreach (KeyValuePair<int, EnemyMarker> item in _enemyMarkers)
-                if (!activeEnemies.Contains(item.Key)) removedEnemies.Add(item.Key);
-            foreach (int id in removedEnemies)
+                if (!_activeEnemyIds.Contains(item.Key)) _removedEnemyIds.Add(item.Key);
+            foreach (int id in _removedEnemyIds)
             {
                 Destroy(_enemyMarkers[id].Rect.gameObject);
                 _enemyMarkers.Remove(id);
             }
 
-            var activeImpacts = new HashSet<int>();
+            _activeImpactIds.Clear();
             foreach (PendingAttack impact in _combat.PendingAttacks)
             {
-                activeImpacts.Add(impact.Sequence);
+                _activeImpactIds.Add(impact.Sequence);
                 if (!_impactMarkers.TryGetValue(impact.Sequence, out RectTransform marker))
                     _impactMarkers.Add(impact.Sequence, marker = CreateImpactMarker());
                 marker.anchoredPosition = CellToBoardPosition(impact.ImpactPoint);
             }
-            var removedImpacts = new List<int>();
+            _removedImpactIds.Clear();
             foreach (KeyValuePair<int, RectTransform> item in _impactMarkers)
-                if (!activeImpacts.Contains(item.Key)) removedImpacts.Add(item.Key);
-            foreach (int id in removedImpacts)
+                if (!_activeImpactIds.Contains(item.Key)) _removedImpactIds.Add(item.Key);
+            foreach (int id in _removedImpactIds)
             {
                 Destroy(_impactMarkers[id].gameObject);
                 _impactMarkers.Remove(id);
@@ -608,6 +653,7 @@ namespace BackpackDefense
             _moving = null;
             _grabOffset = Vector2Int.zero;
             _isDragging = true;
+            _hasPreviewCache = false;
             Refresh(null, false, null);
         }
 
@@ -621,6 +667,7 @@ namespace BackpackDefense
                 _economy.Place(_selectedUnit, cell - _grabOffset, _rotation);
             _isDragging = false;
             _moving = null;
+            _hasPreviewCache = false;
             Refresh(null, false, null);
         }
 

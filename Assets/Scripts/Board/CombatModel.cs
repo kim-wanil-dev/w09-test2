@@ -104,7 +104,7 @@ namespace BackpackDefense
         [SerializeField] private List<WaveDefinition> _waves = CombatCatalog.CreateDefaultWaves();
 
         public int StartingBaseHealth => _startingBaseHealth;
-        public float FixedStepSeconds => 1f / Mathf.Max(1f, _simulationStepsPerSecond);
+        public double FixedStepSeconds => 1d / Mathf.Max(1f, _simulationStepsPerSecond);
         public float MortarTravelTime => _mortarTravelTime;
         public int WaveClearGold => _waveClearGold;
         public int StartingWave => Mathf.Clamp(_startingWave, 1, WaveCount);
@@ -326,13 +326,13 @@ namespace BackpackDefense
         public Vector2 ImpactPoint { get; }
         public float BlastRadius { get; }
         public float Damage { get; }
-        public float ImpactTime { get; }
+        public double ImpactTime { get; }
 
         /// <summary>
         /// Creates a delayed impact which never tracks its original target.
         /// </summary>
         internal PendingAttack(int sequence, int sourceTowerIndex, Vector2 impactPoint,
-            float blastRadius, float damage, float impactTime)
+            float blastRadius, float damage, double impactTime)
         {
             Sequence = sequence;
             SourceTowerIndex = sourceTowerIndex;
@@ -415,7 +415,7 @@ namespace BackpackDefense
         private sealed class TowerRuntime
         {
             public TowerCombatSnapshot Snapshot;
-            public float NextAttackTime;
+            public double NextAttackTime;
         }
 
         private readonly CombatSettings _settings;
@@ -426,8 +426,8 @@ namespace BackpackDefense
         private TowerRuntime[] _towerRuntime = new TowerRuntime[0];
         private int[] _towerAttackCounts = new int[0];
         private float[] _towerDamageDealt = new float[0];
-        private float _accumulator;
-        private float _simulationTime;
+        private double _accumulator;
+        private double _simulationTime;
         private int _nextSpawnIndex;
         private int _nextEnemySequence;
         private int _nextImpactSequence;
@@ -446,7 +446,7 @@ namespace BackpackDefense
         public int StartingBaseHealth => _settings.StartingBaseHealth;
         public bool IsPaused => _isPaused;
         public float SimulationSpeed => _simulationSpeed;
-        public float SimulationTime => _simulationTime;
+        public double SimulationTime => _simulationTime;
         public int Seed => _seed;
         public IReadOnlyList<EnemyInstance> Enemies => _enemies;
         public IReadOnlyList<PendingAttack> PendingAttacks => _pendingAttacks;
@@ -486,8 +486,8 @@ namespace BackpackDefense
             _nextSpawnIndex = 0;
             _nextEnemySequence = 0;
             _nextImpactSequence = 0;
-            _simulationTime = 0f;
-            _accumulator = 0f;
+            _simulationTime = 0d;
+            _accumulator = 0d;
             _kills = 0;
             _leaks = 0;
             _baseDamage = 0;
@@ -506,8 +506,8 @@ namespace BackpackDefense
         public bool Advance(float unscaledDeltaTime)
         {
             if (Phase != CombatPhase.Combat || _isPaused || unscaledDeltaTime <= 0f) return false;
-            _accumulator += unscaledDeltaTime * _simulationSpeed;
-            float step = _settings.FixedStepSeconds;
+            _accumulator += (double)unscaledDeltaTime * _simulationSpeed;
+            double step = _settings.FixedStepSeconds;
             bool advanced = false;
             while (_accumulator >= step && Phase == CombatPhase.Combat)
             {
@@ -550,11 +550,11 @@ namespace BackpackDefense
         /// <summary>
         /// Simulates one tick in the specified spawn, movement, attack, leak, and result order.
         /// </summary>
-        private void SimulateStep(float step)
+        private void SimulateStep(double step)
         {
             _simulationTime += step;
             SpawnDueEnemies();
-            MoveEnemies(step);
+            MoveEnemies((float)step);
             FireTowerAttacks();
             ResolveDueImpacts();
             RemoveDefeatedEnemies();
@@ -633,7 +633,7 @@ namespace BackpackDefense
                 if (_simulationTime + 0.0001f < runtime.NextAttackTime) continue;
                 EnemyInstance target = FindTarget(tower);
                 if (target == null) continue;
-                runtime.NextAttackTime = _simulationTime + Mathf.Max(0.01f, tower.AttackInterval);
+                runtime.NextAttackTime = _simulationTime + Math.Max(0.01d, tower.AttackInterval);
                 _towerAttackCounts[tower.Index]++;
                 if (tower.Role == TowerRole.Mortar)
                 {

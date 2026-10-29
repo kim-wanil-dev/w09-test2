@@ -195,14 +195,6 @@ namespace BackpackDefense
         }
 
         /// <summary>
-        /// Refreshes an unlocked shop at the next preparation phase.
-        /// </summary>
-        public void RefreshForNextWave()
-        {
-            if (_isPreparing && !_isLocked) RollOffers();
-        }
-
-        /// <summary>
         /// Locks all economy and placement actions while a wave is in progress or awaiting results.
         /// </summary>
         public void BeginCombat()
@@ -215,6 +207,7 @@ namespace BackpackDefense
         /// </summary>
         public void EnterPreparation(int goldReward)
         {
+            if (_isPreparing) return;
             _gold += Mathf.Max(0, goldReward);
             if (!_isLocked) RollOffers();
             _isPreparing = true;
@@ -248,7 +241,7 @@ namespace BackpackDefense
         public bool ReturnToBench(TowerUnit unit)
         {
             if (!_isPreparing || !_units.Contains(unit) || unit.Placement == null || BenchCount() >= BENCH_SIZE) return false;
-            _board.Remove(unit.Placement);
+            if (!_board.Remove(unit.Placement)) return false;
             unit.SetPlacement(null);
             return true;
         }
@@ -259,7 +252,7 @@ namespace BackpackDefense
         public bool Sell(TowerUnit unit)
         {
             if (!_isPreparing || !_units.Contains(unit)) return false;
-            if (unit.Placement != null) _board.Remove(unit.Placement);
+            if (unit.Placement != null && !_board.Remove(unit.Placement)) return false;
             _gold += unit.InvestedGold;
             _units.Remove(unit);
             return true;
@@ -271,7 +264,7 @@ namespace BackpackDefense
         public bool Feed(TowerUnit target, TowerUnit material)
         {
             if (!_isPreparing || !CanFeed(target, material)) return false;
-            if (material.Placement != null) _board.Remove(material.Placement);
+            if (material.Placement != null && !_board.Remove(material.Placement)) return false;
             target.AddMaterial(material);
             _units.Remove(material);
             return true;
@@ -292,6 +285,7 @@ namespace BackpackDefense
         /// </summary>
         public TowerUnit FindUnit(PlacedTower placement)
         {
+            if (placement == null) return null;
             foreach (TowerUnit unit in _units)
                 if (unit.Placement == placement) return unit;
             return null;
